@@ -57,6 +57,9 @@ def load(paths):
 
 
 def med(data, key, field):
+    if key not in data:
+        sys.exit(f"results incomplete: no rows for {key} -- "
+                 "interrupted matrix.sh pass? Re-run ./matrix.sh.")
     return statistics.median(float(r[field]) for r in data[key])
 
 
@@ -93,7 +96,7 @@ def label_for(label, group, arity, suffix=""):
 # ---------------------------------------------------------------------------
 
 
-def section_results(data):
+def section_results(data, passes):
     ovh = med(data, ("warm", "main", "baseline", "ovh", 0), "mean")
     nvf = med(data, ("warm", "main", "baseline", "nvf", 1), "mean")
 
@@ -104,6 +107,7 @@ def section_results(data):
           f"run to run. The `inplace` rows are ratioed against the inplace\n"
           f"hierarchy's own `vf`, which measures within a cycle of the main "
           f"one.\n")
+    print(f"Median of {passes} passes.\n")
     print("| dispatch | arity | disp | x vf |")
     print("|---|---|---|---|")
 
@@ -124,6 +128,7 @@ def section_results(data):
           f"{nvf / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
           f"object rather than\ndispatching on it — which is exactly what the "
           f"`disp` column removes.\n")
+    print(f"Median of {passes} passes.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")
     print("|---|---|---|---|---|---|")
 
@@ -136,7 +141,7 @@ def section_results(data):
                   f"{med(data, k, 'x_disp'):.2f}x |")
 
 
-def section_indirect(loaded):
+def section_indirect(loaded, passes):
     # label, call form, (hier, group) direct, (hier, group) indirect
     SPEC = [
         ("`virtual_ptr`", "om vptr",
@@ -166,6 +171,7 @@ def section_indirect(loaded):
 
                 print(f"| {label} | {ar} | " + " | ".join(cells) + " |")
 
+    print(f"Median of {passes} passes; `disp` cycles, direct → indirect.\n")
     print("#### Warm — the extra load, uncontended\n")
     table("warm")
     print("\n#### Cold (`clflush`) — the extra load, as a cache miss\n")
@@ -191,6 +197,10 @@ def section_matrix(loaded, passes):
                 for name, _ in COLUMNS:
                     d = loaded[name]
                     k = (mode, hier, group, disp, ar)
+                    if k not in d:
+                        sys.exit(f"results incomplete: no rows for {k} in "
+                                 f"{name} -- interrupted matrix.sh pass? "
+                                 "Re-run ./matrix.sh.")
                     ratios = [float(r["x_disp"]) for r in d[k]]
                     ratio = statistics.median(ratios)
                     cells.append(f"{ratio:.2f}x ({cycles(med(d, k, 'disp'))})")
@@ -202,10 +212,16 @@ def section_matrix(loaded, passes):
                 shown = label_for(label, group, ar, " (yardstick)")
                 print(f"| `{shown}` | " + " | ".join(cells) + " |")
 
-        spreads.sort()
-        print(f"\nMedian of {passes} passes. Spread across passes: median "
-              f"{statistics.median(spreads):.0f}%, p90 "
-              f"{spreads[int(len(spreads) * 0.9)]:.0f}%.\n")
+        if spreads:
+            spreads.sort()
+            print(f"\nMedian of {passes} passes. Spread across passes: "
+                  f"median {statistics.median(spreads):.0f}%, p90 "
+                  f"{spreads[int(len(spreads) * 0.9)]:.0f}%.\n")
+        else:
+            # With 1 or 2 passes there is no spread; the old unconditional
+            # median() crashed here (review finding).
+            print(f"\nMedian of {passes} passes -- too few for spread "
+                  f"statistics.\n")
 
     emit("clflush", "Caches cold (`clflush`)")
     emit("warm", "Warm caches")
@@ -234,6 +250,7 @@ def main():
         sys.exit(f"no {root}/run*/ directories -- run ./matrix.sh first")
 
     loaded = {}
+    counts = []
 
     for name, fn in COLUMNS:
         paths = [os.path.join(d, fn) for d in run_dirs
@@ -241,17 +258,23 @@ def main():
         if not paths:
             sys.exit(f"missing {fn} in every {root}/run*/")
         loaded[name] = load(paths)
+        counts.append(len(paths))
+
+    # min over columns: after an interrupted matrix.sh, counting run dirs on
+    # disk overstated the data actually loaded (review finding).
+    passes = min(counts)
 
     if section in ("results", "all"):
-        section_results(loaded[next(n for n, f in COLUMNS if f == BUILD)])
+        section_results(loaded[next(n for n, f in COLUMNS if f == BUILD)],
+                        passes)
         print()
 
     if section in ("indirect", "all"):
-        section_indirect(loaded)
+        section_indirect(loaded, passes)
         print()
 
     if section in ("matrix", "all"):
-        section_matrix(loaded, len(run_dirs))
+        section_matrix(loaded, passes)
 
 
 if __name__ == "__main__":

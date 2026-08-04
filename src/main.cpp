@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -140,10 +141,20 @@ struct env {
 };
 
 // Flush an object and the C++ v-table it points to.
+//
+// The v-table region starts 16 bytes BEFORE the address point: offset-to-top
+// and the type_info pointer live at vptr-16/-8, and the type_info pointer is
+// the first dependent load of every `om ref` dispatch. flush_range aligns its
+// start down to a line, which covered vptr-8 only when the vptr was not
+// 64-byte aligned -- a compiler-asymmetric hole (review finding: line-aligned
+// vtables occur ~3x more often in the clang link layout than gcc's), which
+// let those receivers skip a real cold miss.
 template<class B>
 inline void object_regions(const B* p, std::vector<region>& out) {
     out.push_back({p, sizeof(B) < 64 ? 64 : sizeof(B)});
-    out.push_back({*reinterpret_cast<void* const*>(p), 512});
+
+    auto vtbl = *reinterpret_cast<const char* const*>(p);
+    out.push_back({vtbl - 16, 512 + 16});
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +168,7 @@ inline void object_regions(const B* p, std::vector<region>& out) {
 // ---------------------------------------------------------------------------
 
 struct v_ovh {
+    static constexpr bool touches_receiver = false;
     static constexpr const char* name = "ovh";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
@@ -184,6 +196,7 @@ struct v_ovh {
 // miss on the receiver is charged to reaching the object rather than to
 // dispatching on it.
 struct v_nvf1 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
@@ -205,6 +218,7 @@ struct v_nvf1 {
 };
 
 struct v_vf1 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = "main";
@@ -231,6 +245,7 @@ struct pair_args {
 };
 
 struct v_nvf2 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "nvf+nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
@@ -254,6 +269,7 @@ struct v_nvf2 {
 };
 
 struct v_vf2 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "vf+vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = "main";
@@ -312,6 +328,7 @@ struct vp_traits<indirect_registry> {
 
 template<class R, const char* Group>
 struct v_om_ref1 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -336,6 +353,7 @@ struct v_om_ref1 {
 
 template<class R, const char* Group>
 struct v_om_vp1 {
+    static constexpr bool touches_receiver = false;
     static constexpr const char* name = "om vptr";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -360,6 +378,7 @@ struct v_om_vp1 {
 
 template<class R, const char* Group>
 struct v_om_ref2 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -391,6 +410,7 @@ struct vp_pair_args {
 
 template<class R, const char* Group>
 struct v_om_vp2 {
+    static constexpr bool touches_receiver = false;
     static constexpr const char* name = "om vptr";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -447,6 +467,7 @@ struct ipair_args {
 
 template<class R, const char* Hier>
 struct v_ip_nvf1 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = Hier;
@@ -469,6 +490,7 @@ struct v_ip_nvf1 {
 
 template<class R, const char* Hier>
 struct v_ip_nvf2 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "nvf+nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = Hier;
@@ -493,6 +515,7 @@ struct v_ip_nvf2 {
 
 template<class R, const char* Hier>
 struct v_ip_vf1 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = Hier;
@@ -515,6 +538,7 @@ struct v_ip_vf1 {
 
 template<class R, const char* Hier>
 struct v_ip_vf2 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "vf+vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = Hier;
@@ -539,6 +563,7 @@ struct v_ip_vf2 {
 
 template<class R, const char* Group, const char* Hier>
 struct v_ip_ref1 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = Hier;
@@ -563,6 +588,7 @@ struct v_ip_ref1 {
 
 template<class R, const char* Group, const char* Hier>
 struct v_ip_ref2 {
+    static constexpr bool touches_receiver = true;
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = Hier;
@@ -609,6 +635,7 @@ struct row {
     std::string group;
     std::string hier;
     int arity;
+    bool touches_receiver;
     cache_mode mode;
     stats st;
 };
@@ -649,8 +676,8 @@ auto run(env& e, const config& cfg, cache_mode mode) -> row {
         samples.push_back(cycles);
     }
 
-    return {V::name,  V::group, V::hier,
-            V::arity, mode,     summarize(std::move(samples))};
+    return {V::name, V::group, V::hier,  V::arity, V::touches_receiver,
+            mode,    summarize(std::move(samples))};
 }
 
 // ---------------------------------------------------------------------------
@@ -669,8 +696,15 @@ auto verify(env& e) -> bool {
             const auto* a = e.ptrs[i];
             const auto* b = e.ptrs[j];
 
-            auto expect1 = a->vf(x);
-            auto expect2 = collide_ref<vector_registry>::fn(*a, *b, x);
+            // Independent oracles, from the class contracts alone. The old
+            // expectation for arity 2 was collide_ref<vector_registry> -- one
+            // of the paths under test -- so every registry being wrong the
+            // same way (an unregistered overrider pack, say) passed unseen
+            // (review finding). vf(x) contracts to x + tag; the diagonal
+            // overrider fires iff both receivers are the same leaf; dd
+            // dispatches on `a`, then dd_with on `b`, so it returns x + b.tag.
+            auto want1 = x + a->tag;
+            auto want2 = (a->tag == b->tag) ? x + a->tag : x;
 
             struct check {
                 const char* what;
@@ -679,35 +713,39 @@ auto verify(env& e) -> bool {
             };
 
             const check checks[] = {
-                {"nvf", a->nvf(x), expect1},
-                {"vec ref1", poke_ref<vector_registry>::fn(*a, x), expect1},
-                {"map ref1", poke_ref<map_registry>::fn(*a, x), expect1},
-                {"flat ref1", poke_ref<flat_registry>::fn(*a, x), expect1},
+                {"vf yardstick", a->vf(x), want1},
+                {"dd yardstick", a->dd(*b, x), x + b->tag},
+                {"vec ref2", collide_ref<vector_registry>::fn(*a, *b, x),
+                 want2},
+                {"nvf", a->nvf(x), want1},
+                {"vec ref1", poke_ref<vector_registry>::fn(*a, x), want1},
+                {"map ref1", poke_ref<map_registry>::fn(*a, x), want1},
+                {"flat ref1", poke_ref<flat_registry>::fn(*a, x), want1},
                 {"vec vp1", poke_vp<vector_registry>::fn(e.vp_vec[i], x),
-                 expect1},
-                {"map vp1", poke_vp<map_registry>::fn(e.vp_map[i], x), expect1},
+                 want1},
+                {"map vp1", poke_vp<map_registry>::fn(e.vp_map[i], x), want1},
                 {"flat vp1", poke_vp<flat_registry>::fn(e.vp_flat[i], x),
-                 expect1},
-                {"ind ref1", poke_ref<indirect_registry>::fn(*a, x), expect1},
+                 want1},
+                {"ind ref1", poke_ref<indirect_registry>::fn(*a, x), want1},
                 {"ind vp1", poke_vp<indirect_registry>::fn(e.vp_ind[i], x),
-                 expect1},
+                 want1},
                 {"ind ref2",
-                 collide_ref<indirect_registry>::fn(*a, *b, x), expect2},
+                 collide_ref<indirect_registry>::fn(*a, *b, x), want2},
                 {"ind vp2",
                  collide_vp<indirect_registry>::fn(e.vp_ind[i], e.vp_ind[j], x),
-                 expect2},
-                {"map ref2", collide_ref<map_registry>::fn(*a, *b, x), expect2},
+                 want2},
+                {"map ref2", collide_ref<map_registry>::fn(*a, *b, x), want2},
                 {"flat ref2", collide_ref<flat_registry>::fn(*a, *b, x),
-                 expect2},
+                 want2},
                 {"vec vp2",
                  collide_vp<vector_registry>::fn(e.vp_vec[i], e.vp_vec[j], x),
-                 expect2},
+                 want2},
                 {"map vp2",
                  collide_vp<map_registry>::fn(e.vp_map[i], e.vp_map[j], x),
-                 expect2},
+                 want2},
                 {"flat vp2",
                  collide_vp<flat_registry>::fn(e.vp_flat[i], e.vp_flat[j], x),
-                 expect2},
+                 want2},
             };
 
             for (const auto& c : checks) {
@@ -731,7 +769,14 @@ auto verify(env& e) -> bool {
                 const auto* b = pop.ptrs[j];
 
                 auto got1 = ref1(*a, x);
-                auto want1 = a->vf(x);
+                auto want1 = x + a->tag;
+
+                if (a->vf(x) != want1) {
+                    std::printf(
+                        "MISMATCH %s vf at %zu: got %d, want %d\n", what, i,
+                        a->vf(x), want1);
+                    ok = false;
+                }
 
                 if (got1 != want1) {
                     std::printf(
@@ -828,6 +873,17 @@ void report(
     // apparatus-and-object-compensated number; `net` still carries the cold
     // miss on the receiver, which in the cold modes dominates it.
     auto disp_of = [&](const row& r, double& se) -> double {
+        // The om vptr timed regions never dereference the receiver: the
+        // dispatch reads the virtual_ptr (already in the arguments), the
+        // method slot and the table, and the overriders ignore the object.
+        // Subtracting the nvf baseline would credit those rows with a
+        // receiver miss they never paid -- cold, that fabricated ~270 cycles
+        // and made "dispatch alone" read ~0.96x when the honest figure is the
+        // row's whole net (review finding). For them, disp IS net.
+        if (!r.touches_receiver) {
+            return net_of(r, se);
+        }
+
         const auto* b = obj_baseline(r.mode, r.arity, r.hier);
 
         if (b == nullptr || r.arity == 0) {
@@ -976,25 +1032,53 @@ auto parse(int argc, char** argv, config& cfg) -> bool {
         std::string arg = argv[i];
 
         auto value = [&]() -> const char* {
-            return (i + 1 < argc) ? argv[++i] : "0";
+            if (i + 1 >= argc) {
+                std::printf("missing value for %s\n", arg.c_str());
+                return nullptr;
+            }
+            return argv[++i];
         };
 
         if (arg == "--reps") {
-            cfg.reps = std::strtoull(value(), nullptr, 10);
+            const char* v = value();
+            if (v == nullptr) {
+                return false;
+            }
+            cfg.reps = std::strtoull(v, nullptr, 10);
         } else if (arg == "--objects") {
-            cfg.objects = std::strtoull(value(), nullptr, 10);
+            const char* v = value();
+            if (v == nullptr) {
+                return false;
+            }
+            cfg.objects = std::strtoull(v, nullptr, 10);
         } else if (arg == "--sweep-mb") {
-            cfg.sweep_mb = std::strtoull(value(), nullptr, 10);
+            const char* v = value();
+            if (v == nullptr) {
+                return false;
+            }
+            cfg.sweep_mb = std::strtoull(v, nullptr, 10);
         } else if (arg == "--cpu") {
-            cfg.cpu = std::atoi(value());
+            const char* v = value();
+            if (v == nullptr) {
+                return false;
+            }
+            cfg.cpu = std::atoi(v);
         } else if (arg == "--seed") {
-            cfg.seed = static_cast<unsigned>(std::strtoul(value(), nullptr, 10));
+            const char* v = value();
+            if (v == nullptr) {
+                return false;
+            }
+            cfg.seed = static_cast<unsigned>(std::strtoul(v, nullptr, 10));
         } else if (arg == "--csv") {
             cfg.csv = true;
         } else if (arg == "--verify") {
             cfg.verify_only = true;
         } else if (arg == "--mode") {
-            std::string m = value();
+            const char* v = value();
+            if (v == nullptr) {
+                return false;
+            }
+            std::string m = v;
             cfg.warm = cfg.clflush = cfg.sweep = false;
             if (m == "warm") {
                 cfg.warm = true;
@@ -1019,6 +1103,22 @@ auto parse(int argc, char** argv, config& cfg) -> bool {
             std::printf("unknown option: %s\n", arg.c_str());
             return false;
         }
+    }
+
+    if (cfg.objects == 0 || cfg.reps == 0) {
+        std::printf("--objects and --reps must be at least 1\n");
+        return false;
+    }
+
+    if (cfg.sweep_mb == 0 ||
+        cfg.sweep_mb > std::numeric_limits<std::size_t>::max() / (1024 * 1024)) {
+        std::printf("--sweep-mb out of range for this build's size_t\n");
+        return false;
+    }
+
+    if (cfg.cpu < 0) {
+        std::printf("--cpu must be non-negative\n");
+        return false;
     }
 
     return true;

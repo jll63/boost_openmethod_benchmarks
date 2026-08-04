@@ -21,6 +21,13 @@ REPS=${REPS:-6000}
 RUNS=${RUNS:-5}
 OUTDIR=${OUTDIR:-results}
 
+# Old pass directories would silently blend into report.py's medians -- and
+# because results/ is committed, stale runs are the norm here, not an
+# accident: RUNS=5 over the committed run1..run7 used to leave run6 and run7
+# mixing a previous code version into every median (review finding).
+mkdir -p "$OUTDIR"
+rm -rf "$OUTDIR"/run*
+
 # Build once; the passes only re-measure.
 for cc in g++ clang++; do
     for bits in 64 32; do
@@ -33,6 +40,10 @@ for cc in g++ clang++; do
     done
 done
 
+tmp_warm=$(mktemp)
+tmp_cold=$(mktemp)
+trap 'rm -f "$tmp_warm" "$tmp_cold"' EXIT
+
 k=1
 while [ "$k" -le "$RUNS" ]; do
     dir="$OUTDIR/run$k"
@@ -42,11 +53,19 @@ while [ "$k" -le "$RUNS" ]; do
     for cc in g++ clang++; do
         for bits in 64 32; do
             bin="bin/benchmark-$cc-$bits"
+
+            # Two plain redirections, then concatenate: the old
+            # `... | tail -n +2` pipeline reported only tail's exit status,
+            # so a benchmark killed mid-leg left a warm-only CSV and the
+            # script still exited 0 (review finding).
+            taskset -c "$CPU" "$bin" --cpu "$CPU" --reps "$REPS" \
+                --mode warm --csv > "$tmp_warm"
+            taskset -c "$CPU" "$bin" --cpu "$CPU" --reps "$REPS" \
+                --mode clflush --csv > "$tmp_cold"
+
             {
-                taskset -c "$CPU" "$bin" --cpu "$CPU" --reps "$REPS" \
-                    --mode warm --csv
-                taskset -c "$CPU" "$bin" --cpu "$CPU" --reps "$REPS" \
-                    --mode clflush --csv | tail -n +2
+                cat "$tmp_warm"
+                tail -n +2 "$tmp_cold"
             } > "$dir/$cc-$bits.csv"
         done
     done

@@ -39,7 +39,9 @@ Boost 1.91 installed in `/usr/local/include`. Header-only, nothing is linked. Ed
 machine-specific and is not committed.
 
 32-bit builds need `sudo apt install g++-multilib` (clang uses gcc's multilib headers, so one
-install covers both compilers). This is not a git repository.
+install covers both compilers). The repository lives at
+https://github.com/jll63/boost_openmethod_benchmarks (branch `master`); `bin/`, `build/`,
+`.vscode/` and the `include` symlink are local-only and gitignored.
 
 ## Architecture
 
@@ -70,7 +72,10 @@ recommended API), in the `OMB_RUN` macro, in `report.py`, and in the README tabl
 - `net = mean - ovh` removes the apparatus (the `rdtsc` pair, the fences, cold code at the call
   site).
 - `disp = mean - nvf` additionally removes *reaching the receiver* — `nvf` is a non-virtual member
-  call that loads the object but dispatches on nothing. Cold, that is ~45% of what a virtual call
+  call that loads the object but dispatches on nothing. Rows whose timed region never touches the
+  receiver (`om vptr`: the v-table pointer is already in the arguments) set
+  `touches_receiver = false` and get `disp = net` instead — subtracting `nvf` from them fabricates
+  a credit for a miss they never paid. Cold, that is ~45% of what a virtual call
   appears to cost, and it is common to every variant, so `net` alone compresses every ratio toward
   1.
 
@@ -114,8 +119,9 @@ ABI and cannot be constant-folded or devirtualized. Three cache modes: `warm`, `
 
 `-O2` is unsteppable: the dispatch inlines into `timed_call` and the locals are gone. Build
 `DEBUG=1 CLASSES=4 ./build.sh` instead (`-O0 -g`, `-g`-suffixed binary, small hierarchy). Its
-timings are meaningless — that is not what it is for. `.vscode/launch.json` has *trace: verify
-(debug build)* and *trace: one dispatch (debug build)* wired to a *build debug* task.
+timings are meaningless — that is not what it is for. `.vscode/launch.json` (local editor config, not committed) has *trace: verify (debug build)* and
+*trace: one dispatch (debug build)* wired to a *build debug* task; a fresh clone has only the
+`DEBUG=1` build.sh path.
 
 `--verify` is the best entry point: it walks every dispatch path once with no timing loops around
 it. The chain to a dispatch, with the stops worth breaking on:
@@ -136,8 +142,10 @@ the fastest way to land mid-dispatch with the whole chain on the stack.
 
 ## Invariants that must not be broken
 
-- **`--verify` is the correctness gate.** It calls every dispatch path and checks they all return
-  identical values against the virtual function of the matching hierarchy. A registry wired to the
+- **`--verify` is the correctness gate, and its oracles are independent of the paths under
+  test**: `x + tag` for arity 1, the tag rule for arity 2, `x + b.tag` for the dd yardstick.
+  It used to compare the open methods against each other, which passed when every registry was
+  wrong the same way (e.g. an unregistered overrider pack). A registry wired to the
   wrong method, or an overrider that silently failed to register, otherwise produces a plausible but
   meaningless table. It runs at startup of every measurement run.
 - **The `virtual_ptr` control**: the three *direct* registries' `om vptr` rows must agree, because

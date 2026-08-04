@@ -200,11 +200,15 @@ inline auto calibrate_tsc_hz(double seconds = 0.2) -> double {
     clock_gettime(CLOCK_MONOTONIC, &t0);
     auto c0 = tsc_start();
 
-    const auto target = static_cast<long>(seconds * 1e9);
+    // int64 throughout: on -m32, `long` is 32 bits and a stall of ~2.15 s
+    // during the spin (SIGSTOP, hypervisor descheduling) made the multiply
+    // overflow -- UB, and an absurd calibrated frequency.
+    const auto target = static_cast<std::int64_t>(seconds * 1e9);
 
     for (;;) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
-        auto so_far = (t1.tv_sec - t0.tv_sec) * 1000000000L +
+        auto so_far = static_cast<std::int64_t>(t1.tv_sec - t0.tv_sec) *
+                1000000000 +
             (t1.tv_nsec - t0.tv_nsec);
 
         if (so_far >= target) {
@@ -214,7 +218,8 @@ inline auto calibrate_tsc_hz(double seconds = 0.2) -> double {
 
     auto c1 = tsc_stop();
     auto ns = static_cast<double>(
-        (t1.tv_sec - t0.tv_sec) * 1000000000L + (t1.tv_nsec - t0.tv_nsec));
+        static_cast<std::int64_t>(t1.tv_sec - t0.tv_sec) * 1000000000 +
+        (t1.tv_nsec - t0.tv_nsec));
 
     return static_cast<double>(elapsed(c0, c1)) * 1e9 / ns;
 }
