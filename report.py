@@ -5,7 +5,8 @@
 
 Three sections, matching the three places README.md carries tables:
 
-  results   the per-build tables under "## Results" (gcc/64 only)
+  results   the per-build tables under "## Results" (gcc/64 only, const bodies)
+  used      the use-world tables under "## Two fair comparisons" (gcc/64)
   indirect  the direct-vs-indirect pair under "## Cost of `indirect_vptr`"
   matrix    the compiler x bitness tables under "## Compiler and bitness"
 
@@ -43,14 +44,14 @@ INPLACE = ("inplace", "inplace_ind")
 
 
 def load(paths):
-    """(mode, hier, group, dispatch, arity) -> list of row dicts, one per pass"""
+    """(mode, hier, body, group, dispatch, arity) -> row dicts, one per pass"""
     table = {}
 
     for path in paths:
         with open(path, newline="") as f:
             for r in csv.DictReader(f):
-                key = (r["mode"], r["hier"], r["group"], r["dispatch"],
-                       int(r["arity"]))
+                key = (r["mode"], r["hier"], r["body"], r["group"],
+                       r["dispatch"], int(r["arity"]))
                 table.setdefault(key, []).append(r)
 
     return table
@@ -86,6 +87,34 @@ def dispatch_rows(arity):
     return rows
 
 
+def emit_world(data, body, passes, warm_caption, cold_caption):
+    """The results-shaped table pair for one body world."""
+    print(warm_caption + "\n")
+    print(f"Median of {passes} passes.\n")
+    print("| dispatch | arity | disp | x vf |")
+    print("|---|---|---|---|")
+
+    for arity in (1, 2):
+        for label, hier, group, disp, ar in dispatch_rows(arity):
+            k = ("warm", hier, body, group, disp, ar)
+            print(f"| `{label_for(label, group, ar)}` | {ar} | "
+                  f"{cycles(med(data, k, 'disp'))} | "
+                  f"{med(data, k, 'x_disp'):.2f}x |")
+
+    print("\n" + cold_caption + "\n")
+    print(f"Median of {passes} passes.\n")
+    print("| dispatch | arity | net | disp | x net | x disp |")
+    print("|---|---|---|---|---|---|")
+
+    for arity in (1, 2):
+        for label, hier, group, disp, ar in dispatch_rows(arity):
+            k = ("clflush", hier, body, group, disp, ar)
+            print(f"| `{label_for(label, group, ar)}` | {ar} | "
+                  f"{med(data, k, 'net'):.0f} | {med(data, k, 'disp'):.0f} | "
+                  f"{med(data, k, 'x_net'):.2f}x | "
+                  f"{med(data, k, 'x_disp'):.2f}x |")
+
+
 def label_for(label, group, arity, suffix=""):
     if group != "yardstick":
         return label
@@ -97,8 +126,8 @@ def label_for(label, group, arity, suffix=""):
 
 
 def section_results(data, passes):
-    ovh = med(data, ("warm", "main", "baseline", "ovh", 0), "mean")
-    nvf = med(data, ("warm", "main", "baseline", "nvf", 1), "mean")
+    ovh = med(data, ("warm", "main", "-", "baseline", "ovh", 0), "mean")
+    nvf = med(data, ("warm", "main", "-", "baseline", "nvf", 1), "mean")
 
     print("### Warm caches — the sharpest numbers\n")
     print(f"Nothing is evicted, so reaching the receiver is almost free: the "
@@ -113,13 +142,13 @@ def section_results(data, passes):
 
     for arity in (1, 2):
         for label, hier, group, disp, ar in dispatch_rows(arity):
-            k = ("warm", hier, group, disp, ar)
+            k = ("warm", hier, "const", group, disp, ar)
             print(f"| `{label_for(label, group, ar)}` | {ar} | "
                   f"{cycles(med(data, k, 'disp'))} | "
                   f"{med(data, k, 'x_disp'):.2f}x |")
 
-    nvf = med(data, ("clflush", "main", "baseline", "nvf", 1), "net")
-    vfn = med(data, ("clflush", "main", "yardstick", "vf", 1), "net")
+    nvf = med(data, ("clflush", "main", "-", "baseline", "nvf", 1), "net")
+    vfn = med(data, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
 
     print("\n### Caches cold (`clflush`)\n")
     print(f"Flushed, the first touch of the receiver is a cache miss in its own "
@@ -134,7 +163,7 @@ def section_results(data, passes):
 
     for arity in (1, 2):
         for label, hier, group, disp, ar in dispatch_rows(arity):
-            k = ("clflush", hier, group, disp, ar)
+            k = ("clflush", hier, "const", group, disp, ar)
             print(f"| `{label_for(label, group, ar)}` | {ar} | "
                   f"{med(data, k, 'net'):.0f} | {med(data, k, 'disp'):.0f} | "
                   f"{med(data, k, 'x_net'):.2f}x | "
@@ -163,8 +192,8 @@ def section_indirect(loaded, passes):
 
                 for name, _ in COLUMNS:
                     d = loaded[name]
-                    dv = med(d, (mode, dkey[0], dkey[1], call, ar), "disp")
-                    iv = med(d, (mode, ikey[0], ikey[1], call, ar), "disp")
+                    dv = med(d, (mode, dkey[0], "const", dkey[1], call, ar), "disp")
+                    iv = med(d, (mode, ikey[0], "const", ikey[1], call, ar), "disp")
                     delta = f"{iv - dv:+.1f}" if dv < 100 else f"{iv - dv:+.0f}"
                     cells.append(
                         f"{cycles(dv)} → {cycles(iv)} (**{delta}**)")
@@ -196,7 +225,7 @@ def section_matrix(loaded, passes):
 
                 for name, _ in COLUMNS:
                     d = loaded[name]
-                    k = (mode, hier, group, disp, ar)
+                    k = (mode, hier, "const", group, disp, ar)
                     if k not in d:
                         sys.exit(f"results incomplete: no rows for {k} in "
                                  f"{name} -- interrupted matrix.sh pass? "
@@ -230,7 +259,7 @@ def section_matrix(loaded, passes):
 # ---------------------------------------------------------------------------
 
 
-SECTIONS = ("results", "indirect", "matrix", "all")
+SECTIONS = ("results", "used", "indirect", "matrix", "all")
 
 
 def main():
@@ -264,9 +293,17 @@ def main():
     # disk overstated the data actually loaded (review finding).
     passes = min(counts)
 
+    single = loaded[next(n for n, f in COLUMNS if f == BUILD)]
+
     if section in ("results", "all"):
-        section_results(loaded[next(n for n, f in COLUMNS if f == BUILD)],
-                        passes)
+        section_results(single, passes)
+        print()
+
+    if section in ("used", "all"):
+        emit_world(
+            single, "use", passes,
+            "#### Warm, receiver used",
+            "#### Cold (`clflush`), receiver used")
         print()
 
     if section in ("indirect", "all"):

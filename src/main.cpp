@@ -16,6 +16,7 @@
 
 #include "hierarchy.hpp"
 #include "registries.hpp"
+#include "use_methods.hpp"
 #include "timing.hpp"
 
 #include <boost/openmethod/initialize.hpp>
@@ -169,6 +170,7 @@ inline void object_regions(const B* p, std::vector<region>& out) {
 
 struct v_ovh {
     static constexpr bool touches_receiver = false;
+    static constexpr const char* body = "-";
     static constexpr const char* name = "ovh";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
@@ -197,6 +199,7 @@ struct v_ovh {
 // dispatching on it.
 struct v_nvf1 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "-";
     static constexpr const char* name = "nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
@@ -219,6 +222,7 @@ struct v_nvf1 {
 
 struct v_vf1 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = "main";
@@ -246,6 +250,7 @@ struct pair_args {
 
 struct v_nvf2 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "-";
     static constexpr const char* name = "nvf+nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
@@ -270,6 +275,7 @@ struct v_nvf2 {
 
 struct v_vf2 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "vf+vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = "main";
@@ -329,6 +335,7 @@ struct vp_traits<indirect_registry> {
 template<class R, const char* Group>
 struct v_om_ref1 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -354,6 +361,7 @@ struct v_om_ref1 {
 template<class R, const char* Group>
 struct v_om_vp1 {
     static constexpr bool touches_receiver = false;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "om vptr";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -379,6 +387,7 @@ struct v_om_vp1 {
 template<class R, const char* Group>
 struct v_om_ref2 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -411,6 +420,7 @@ struct vp_pair_args {
 template<class R, const char* Group>
 struct v_om_vp2 {
     static constexpr bool touches_receiver = false;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "om vptr";
     static constexpr const char* group = Group;
     static constexpr const char* hier = "main";
@@ -468,6 +478,7 @@ struct ipair_args {
 template<class R, const char* Hier>
 struct v_ip_nvf1 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "-";
     static constexpr const char* name = "nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = Hier;
@@ -491,6 +502,7 @@ struct v_ip_nvf1 {
 template<class R, const char* Hier>
 struct v_ip_nvf2 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "-";
     static constexpr const char* name = "nvf+nvf";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = Hier;
@@ -516,6 +528,7 @@ struct v_ip_nvf2 {
 template<class R, const char* Hier>
 struct v_ip_vf1 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = Hier;
@@ -539,6 +552,7 @@ struct v_ip_vf1 {
 template<class R, const char* Hier>
 struct v_ip_vf2 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "vf+vf";
     static constexpr const char* group = "yardstick";
     static constexpr const char* hier = Hier;
@@ -564,6 +578,7 @@ struct v_ip_vf2 {
 template<class R, const char* Group, const char* Hier>
 struct v_ip_ref1 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = Hier;
@@ -589,6 +604,7 @@ struct v_ip_ref1 {
 template<class R, const char* Group, const char* Hier>
 struct v_ip_ref2 {
     static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "const";
     static constexpr const char* name = "om ref";
     static constexpr const char* group = Group;
     static constexpr const char* hier = Hier;
@@ -609,6 +625,269 @@ struct v_ip_ref2 {
         object_regions(p.a, out);
         object_regions(p.b, out);
         out.push_back({&icollide_ref<R>::fn, sizeof(icollide_ref<R>)});
+        inplace_registry_regions<R>(out);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Use-world variants: same shapes, use-flavored bodies. All touch the
+// receiver -- that is the definition of this world -- so disp subtracts nvf
+// for every one of them, including the virtual_ptr forms.
+// ---------------------------------------------------------------------------
+
+struct v_vfu1 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "vf";
+    static constexpr const char* group = "yardstick";
+    static constexpr const char* hier = "main";
+    static constexpr int arity = 1;
+
+    using args = const Base*;
+
+    static auto prepare(env& e, std::size_t i, std::size_t) -> args {
+        return e.ptrs[i];
+    }
+
+    static auto call(args a, int x) -> int {
+        return a->vfu(x);
+    }
+
+    static void regions(args a, std::vector<region>& out) {
+        object_regions(a, out);
+    }
+};
+
+struct v_vfu2 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "vf+vf";
+    static constexpr const char* group = "yardstick";
+    static constexpr const char* hier = "main";
+    static constexpr int arity = 2;
+
+    using args = pair_args;
+
+    static auto prepare(env& e, std::size_t i, std::size_t j) -> args {
+        return {e.ptrs[i], e.ptrs[j]};
+    }
+
+    static auto call(args p, int x) -> int {
+        return p.a->ddu(*p.b, x);
+    }
+
+    static void regions(args p, std::vector<region>& out) {
+        object_regions(p.a, out);
+        object_regions(p.b, out);
+    }
+};
+
+template<class R, const char* Group>
+struct v_om_refu1 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "om ref";
+    static constexpr const char* group = Group;
+    static constexpr const char* hier = "main";
+    static constexpr int arity = 1;
+
+    using args = const Base*;
+
+    static auto prepare(env& e, std::size_t i, std::size_t) -> args {
+        return e.ptrs[i];
+    }
+
+    static auto call(args a, int x) -> int {
+        return pokeu_ref<R>::fn(*a, x);
+    }
+
+    static void regions(args a, std::vector<region>& out) {
+        object_regions(a, out);
+        out.push_back({&pokeu_ref<R>::fn, sizeof(pokeu_ref<R>)});
+        registry_regions<R>(out);
+    }
+};
+
+template<class R, const char* Group>
+struct v_om_vpu1 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "om vptr";
+    static constexpr const char* group = Group;
+    static constexpr const char* hier = "main";
+    static constexpr int arity = 1;
+
+    using args = om::virtual_ptr<const Base, R>;
+
+    static auto prepare(env& e, std::size_t i, std::size_t) -> args {
+        return vp_traits<R>::array(e)[i];
+    }
+
+    static auto call(args a, int x) -> int {
+        return pokeu_vp<R>::fn(a, x);
+    }
+
+    static void regions(args a, std::vector<region>& out) {
+        object_regions(a.get(), out);
+        out.push_back({&pokeu_vp<R>::fn, sizeof(pokeu_vp<R>)});
+        registry_regions<R>(out);
+    }
+};
+
+template<class R, const char* Group>
+struct v_om_refu2 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "om ref";
+    static constexpr const char* group = Group;
+    static constexpr const char* hier = "main";
+    static constexpr int arity = 2;
+
+    using args = pair_args;
+
+    static auto prepare(env& e, std::size_t i, std::size_t j) -> args {
+        return {e.ptrs[i], e.ptrs[j]};
+    }
+
+    static auto call(args p, int x) -> int {
+        return collideu_ref<R>::fn(*p.a, *p.b, x);
+    }
+
+    static void regions(args p, std::vector<region>& out) {
+        object_regions(p.a, out);
+        object_regions(p.b, out);
+        out.push_back({&collideu_ref<R>::fn, sizeof(collideu_ref<R>)});
+        registry_regions<R>(out);
+    }
+};
+
+template<class R, const char* Group>
+struct v_om_vpu2 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "om vptr";
+    static constexpr const char* group = Group;
+    static constexpr const char* hier = "main";
+    static constexpr int arity = 2;
+
+    using args = vp_pair_args<R>;
+
+    static auto prepare(env& e, std::size_t i, std::size_t j) -> args {
+        return {vp_traits<R>::array(e)[i], vp_traits<R>::array(e)[j]};
+    }
+
+    static auto call(args p, int x) -> int {
+        return collideu_vp<R>::fn(p.a, p.b, x);
+    }
+
+    static void regions(args p, std::vector<region>& out) {
+        object_regions(p.a.get(), out);
+        object_regions(p.b.get(), out);
+        out.push_back({&collideu_vp<R>::fn, sizeof(collideu_vp<R>)});
+        registry_regions<R>(out);
+    }
+};
+
+template<class R, const char* Hier>
+struct v_ip_vfu1 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "vf";
+    static constexpr const char* group = "yardstick";
+    static constexpr const char* hier = Hier;
+    static constexpr int arity = 1;
+
+    using args = const IBase<R>*;
+
+    static auto prepare(env& e, std::size_t i, std::size_t) -> args {
+        return ip_traits<R>::pop(e).ptrs[i];
+    }
+
+    static auto call(args a, int x) -> int {
+        return a->vfu(x);
+    }
+
+    static void regions(args a, std::vector<region>& out) {
+        object_regions(a, out);
+    }
+};
+
+template<class R, const char* Hier>
+struct v_ip_vfu2 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "vf+vf";
+    static constexpr const char* group = "yardstick";
+    static constexpr const char* hier = Hier;
+    static constexpr int arity = 2;
+
+    using args = ipair_args<R>;
+
+    static auto prepare(env& e, std::size_t i, std::size_t j) -> args {
+        auto& p = ip_traits<R>::pop(e).ptrs;
+        return {p[i], p[j]};
+    }
+
+    static auto call(args p, int x) -> int {
+        return p.a->ddu(*p.b, x);
+    }
+
+    static void regions(args p, std::vector<region>& out) {
+        object_regions(p.a, out);
+        object_regions(p.b, out);
+    }
+};
+
+template<class R, const char* Group, const char* Hier>
+struct v_ip_refu1 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "om ref";
+    static constexpr const char* group = Group;
+    static constexpr const char* hier = Hier;
+    static constexpr int arity = 1;
+
+    using args = const IBase<R>*;
+
+    static auto prepare(env& e, std::size_t i, std::size_t) -> args {
+        return ip_traits<R>::pop(e).ptrs[i];
+    }
+
+    static auto call(args a, int x) -> int {
+        return ipokeu_ref<R>::fn(*a, x);
+    }
+
+    static void regions(args a, std::vector<region>& out) {
+        object_regions(a, out);
+        out.push_back({&ipokeu_ref<R>::fn, sizeof(ipokeu_ref<R>)});
+        inplace_registry_regions<R>(out);
+    }
+};
+
+template<class R, const char* Group, const char* Hier>
+struct v_ip_refu2 {
+    static constexpr bool touches_receiver = true;
+    static constexpr const char* body = "use";
+    static constexpr const char* name = "om ref";
+    static constexpr const char* group = Group;
+    static constexpr const char* hier = Hier;
+    static constexpr int arity = 2;
+
+    using args = ipair_args<R>;
+
+    static auto prepare(env& e, std::size_t i, std::size_t j) -> args {
+        auto& p = ip_traits<R>::pop(e).ptrs;
+        return {p[i], p[j]};
+    }
+
+    static auto call(args p, int x) -> int {
+        return icollideu_ref<R>::fn(*p.a, *p.b, x);
+    }
+
+    static void regions(args p, std::vector<region>& out) {
+        object_regions(p.a, out);
+        object_regions(p.b, out);
+        out.push_back({&icollideu_ref<R>::fn, sizeof(icollideu_ref<R>)});
         inplace_registry_regions<R>(out);
     }
 };
@@ -636,6 +915,7 @@ struct row {
     std::string hier;
     int arity;
     bool touches_receiver;
+    std::string body;
     cache_mode mode;
     stats st;
 };
@@ -676,8 +956,8 @@ auto run(env& e, const config& cfg, cache_mode mode) -> row {
         samples.push_back(cycles);
     }
 
-    return {V::name, V::group, V::hier,  V::arity, V::touches_receiver,
-            mode,    summarize(std::move(samples))};
+    return {V::name, V::group, V::hier,    V::arity, V::touches_receiver,
+            V::body, mode,     summarize(std::move(samples))};
 }
 
 // ---------------------------------------------------------------------------
@@ -706,6 +986,10 @@ auto verify(env& e) -> bool {
             auto want1 = x + a->tag;
             auto want2 = (a->tag == b->tag) ? x + a->tag : x;
 
+            // Use-world contracts: every body reads every receiver.
+            auto wantu2 = (a->tag == b->tag) ? x + a->tag + b->tag
+                                             : x - a->tag - b->tag;
+
             struct check {
                 const char* what;
                 int got;
@@ -715,6 +999,31 @@ auto verify(env& e) -> bool {
             const check checks[] = {
                 {"vf yardstick", a->vf(x), want1},
                 {"dd yardstick", a->dd(*b, x), x + b->tag},
+                {"vfu yardstick", a->vfu(x), want1},
+                {"ddu yardstick", a->ddu(*b, x), x + a->tag + b->tag},
+                {"vec refu1", pokeu_ref<vector_registry>::fn(*a, x), want1},
+                {"vec vpu1", pokeu_vp<vector_registry>::fn(e.vp_vec[i], x),
+                 want1},
+                {"map refu1", pokeu_ref<map_registry>::fn(*a, x), want1},
+                {"flat refu1", pokeu_ref<flat_registry>::fn(*a, x), want1},
+                {"ind refu1", pokeu_ref<indirect_registry>::fn(*a, x), want1},
+                {"ind vpu1", pokeu_vp<indirect_registry>::fn(e.vp_ind[i], x),
+                 want1},
+                {"vec refu2", collideu_ref<vector_registry>::fn(*a, *b, x),
+                 wantu2},
+                {"vec vpu2",
+                 collideu_vp<vector_registry>::fn(e.vp_vec[i], e.vp_vec[j], x),
+                 wantu2},
+                {"map refu2", collideu_ref<map_registry>::fn(*a, *b, x),
+                 wantu2},
+                {"flat refu2", collideu_ref<flat_registry>::fn(*a, *b, x),
+                 wantu2},
+                {"ind refu2", collideu_ref<indirect_registry>::fn(*a, *b, x),
+                 wantu2},
+                {"ind vpu2",
+                 collideu_vp<indirect_registry>::fn(
+                     e.vp_ind[i], e.vp_ind[j], x),
+                 wantu2},
                 {"vec ref2", collide_ref<vector_registry>::fn(*a, *b, x),
                  want2},
                 {"nvf", a->nvf(x), want1},
@@ -800,6 +1109,58 @@ auto verify(env& e) -> bool {
             }
         }
     };
+
+    auto check_inplace_use = [&](auto& pop, auto refu1, auto refu2,
+                                 const char* what) {
+        for (std::size_t i = 0; i < pop.ptrs.size(); i += 97) {
+            for (std::size_t j = 0; j < pop.ptrs.size(); j += 89) {
+                const auto* a = pop.ptrs[i];
+                const auto* b = pop.ptrs[j];
+
+                auto got1 = refu1(*a, x);
+
+                if (got1 != x + a->tag) {
+                    std::printf(
+                        "MISMATCH %s refu1 at %zu: got %d, want %d\n", what,
+                        i, got1, x + a->tag);
+                    ok = false;
+                }
+
+                auto wantu2 = (a->tag == b->tag) ? x + a->tag + b->tag
+                                                 : x - a->tag - b->tag;
+                auto got2 = refu2(*a, *b, x);
+
+                if (got2 != wantu2) {
+                    std::printf(
+                        "MISMATCH %s refu2 at (%zu,%zu): got %d, want %d\n",
+                        what, i, j, got2, wantu2);
+                    ok = false;
+                }
+            }
+        }
+    };
+
+    check_inplace_use(
+        e.ip_direct,
+        [](const IBase<inplace_registry>& o, int v) {
+            return ipokeu_ref<inplace_registry>::fn(o, v);
+        },
+        [](const IBase<inplace_registry>& o1,
+           const IBase<inplace_registry>& o2, int v) {
+            return icollideu_ref<inplace_registry>::fn(o1, o2, v);
+        },
+        "inplace-use");
+
+    check_inplace_use(
+        e.ip_indirect,
+        [](const IBase<inplace_indirect_registry>& o, int v) {
+            return ipokeu_ref<inplace_indirect_registry>::fn(o, v);
+        },
+        [](const IBase<inplace_indirect_registry>& o1,
+           const IBase<inplace_indirect_registry>& o2, int v) {
+            return icollideu_ref<inplace_indirect_registry>::fn(o1, o2, v);
+        },
+        "inplace_ind-use");
 
     check_inplace(
         e.ip_direct,
@@ -906,7 +1267,8 @@ void report(
 
         for (const auto& y : rows) {
             if (y.group == "yardstick" && y.mode == r.mode &&
-                y.arity == r.arity && y.hier == r.hier) {
+                y.arity == r.arity && y.hier == r.hier &&
+                y.body == r.body) {
                 double se;
                 auto base = use_disp ? disp_of(y, se) : net_of(y, se);
                 auto val = use_disp ? disp_of(r, se) : net_of(r, se);
@@ -919,7 +1281,7 @@ void report(
 
     if (cfg.csv) {
         std::printf(
-            "compiler,bits,mode,hier,group,dispatch,arity,min,median,p90,mean,"
+            "compiler,bits,mode,hier,body,group,dispatch,arity,min,median,p90,mean,"
             "stddev,se,net,"
             "net_se,disp,disp_se,disp_ns,x_net,x_disp\n");
 
@@ -929,11 +1291,12 @@ void report(
             double dse;
             auto disp = disp_of(r, dse);
             std::printf(
-                "%s,%zu,%s,%s,%s,%s,%d,%llu,%llu,%llu,%.2f,%.1f,%.2f,%.2f,%.2f,"
+                "%s,%zu,%s,%s,%s,%s,%s,%d,%llu,%llu,%llu,%.2f,%.1f,%.2f,%.2f,%.2f,"
                 "%.2f,%.2f,%.3f,%.3f,%.3f\n",
                 compiler_id().c_str(), bitness,
-                cache_mode_name(r.mode), r.hier.c_str(), r.group.c_str(),
-                r.name.c_str(), r.arity, (unsigned long long)r.st.min,
+                cache_mode_name(r.mode), r.hier.c_str(), r.body.c_str(),
+                r.group.c_str(), r.name.c_str(), r.arity,
+                (unsigned long long)r.st.min,
                 (unsigned long long)r.st.median, (unsigned long long)r.st.p90,
                 r.st.mean, r.st.stddev, r.st.se, net, se, disp, dse,
                 disp * 1e9 / tsc_hz, ratio_of(r, false), ratio_of(r, true));
@@ -1209,6 +1572,46 @@ auto main_impl(int argc, char** argv) -> int {
             inplace_indirect_registry, group_inplace_ind, hier_inplace_ind);
 
 #undef OMB_RUN_INPLACE
+
+        // The use world: bodies read the receiver(s).
+        rows.push_back(run<v_vfu1>(e, cfg, mode));
+        rows.push_back(run<v_vfu2>(e, cfg, mode));
+
+#define OMB_RUN_USE(R, G)                                                      \
+    rows.push_back(run<v_om_vpu1<R, G>>(e, cfg, mode));                        \
+    rows.push_back(run<v_om_refu1<R, G>>(e, cfg, mode));                       \
+    rows.push_back(run<v_om_vpu2<R, G>>(e, cfg, mode));                        \
+    rows.push_back(run<v_om_refu2<R, G>>(e, cfg, mode))
+
+        OMB_RUN_USE(vector_registry, group_vector);
+        OMB_RUN_USE(map_registry, group_map);
+        OMB_RUN_USE(flat_registry, group_flat);
+        OMB_RUN_USE(indirect_registry, group_indirect);
+
+#undef OMB_RUN_USE
+
+        rows.push_back(run<v_ip_vfu1<inplace_registry, hier_inplace>>(
+            e, cfg, mode));
+        rows.push_back(run<v_ip_vfu2<inplace_registry, hier_inplace>>(
+            e, cfg, mode));
+        rows.push_back(
+            run<v_ip_vfu1<inplace_indirect_registry, hier_inplace_ind>>(
+                e, cfg, mode));
+        rows.push_back(
+            run<v_ip_vfu2<inplace_indirect_registry, hier_inplace_ind>>(
+                e, cfg, mode));
+        rows.push_back(
+            run<v_ip_refu1<inplace_registry, group_inplace, hier_inplace>>(
+                e, cfg, mode));
+        rows.push_back(
+            run<v_ip_refu2<inplace_registry, group_inplace, hier_inplace>>(
+                e, cfg, mode));
+        rows.push_back(run<v_ip_refu1<
+                           inplace_indirect_registry, group_inplace_ind,
+                           hier_inplace_ind>>(e, cfg, mode));
+        rows.push_back(run<v_ip_refu2<
+                           inplace_indirect_registry, group_inplace_ind,
+                           hier_inplace_ind>>(e, cfg, mode));
     }
 
     report(rows, cfg, tsc_hz, e, floor_st);

@@ -8,6 +8,49 @@ states that dispatching through a reference is "between 30% and 50% slower than
 calling the equivalent virtual function", attributed to "micro- and RDTSC-based
 benchmarks", but no code in the repository produces that number. This does.
 
+## Where the v-table pointer lives
+
+The two call forms differ in one structural fact, and most of the numbers below
+follow from it.
+
+A virtual function call finds the v-table *through the object*: the dispatch
+chain starts with a load from the receiver, whether or not the body needs it.
+`virtual_` reference dispatch shares the constraint — its hash chain starts
+from that same embedded pointer.
+
+```
+        pointer               object                v-table
+       ┌───────┐         ┌─────────────┐        ┌───────────┐
+p ───► │ &obj  │ ──────► │ vptr ───────┼──────► │ ...       │
+       └───────┘         │ data        │        │ &f ───────┼──► f()
+                         └─────────────┘        │ ...       │
+                                                └───────────┘
+        the object must be loaded first: the chain starts inside it
+```
+
+A `virtual_ptr` carries the v-table pointer *next to* the object pointer — a
+fat pointer, as in Go and Rust. The dispatch never passes through the object:
+
+```
+        virtual_ptr (fat pointer)              v-table
+       ┌───────┬────────┐                  ┌───────────┐
+vp ──► │ &obj  │ vptr ──┼────────────────► │ ...       │
+       └───┬───┴────────┘                  │ &f ───────┼──► f()
+           │                               └───────────┘
+           ▼
+         object — off the dispatch path entirely
+```
+
+If the object is not already loaded, there is no need to load it: the call
+proceeds immediately. Whether the body then touches the object is the body's
+business — and that is a real fork in workloads, not a benchmark technicality.
+Plenty of OO designs give a base class a **no-op default** that subclasses
+override — event handlers, visitor hooks — and a no-op body touches nothing.
+Those calls should be as fast as possible *because* they do nothing: call
+overhead is their entire cost, and skipping the receiver load is a genuine
+saving, not an accounting trick. The benchmark therefore measures both worlds
+separately; see "Two fair comparisons".
+
 ## What is measured
 
 Five axes, plus yardsticks and baselines:
@@ -19,7 +62,8 @@ Five axes, plus yardsticks and baselines:
 | arity | 1 and 2 virtual arguments |
 | compiler | g++ 13.3 vs clang++ 18.1 |
 | bitness | 64-bit vs 32-bit (`-m32`) |
-| yardstick | `vf` — one virtual call; `vf+vf` — the double dispatch idiom, two chained virtual calls |
+| body | `const` — overrider and virtual bodies return a compile-time constant, the receiver is touched only if the mechanism itself requires it; `use` — every body reads a member of every receiver (see "Two fair comparisons") |
+| yardstick | `vf` — one virtual call; `vf+vf` — the double dispatch idiom, two chained virtual calls; each in both body flavors |
 | baseline | `ovh` — timed region, no dispatch, object never touched; `nvf` / `nvf+nvf` — a non-virtual member call, which loads the receiver(s) but dispatches on nothing |
 
 In the `dispatch` row, the first four values are registries and the last two are
@@ -39,10 +83,11 @@ exactly one registry, and the objects are 24 bytes rather than 16. Every ratio
 below is against the yardstick of its own hierarchy; the three hierarchies' `vf`
 measurements agree to within a cycle, which is what makes one table legitimate.
 
-That comes to 33 variants, each run in 3 cache states: 21 on the main hierarchy
-(4 registries x 2 call forms x 2 arities, plus 2 yardsticks and 3 baselines) and
-6 on each inplace hierarchy (1 call form x 2 arities, plus its own 2 yardsticks
-and 2 baselines).
+That comes to 59 variants, each run in 3 cache states: the 33 const-body ones —
+21 on the main hierarchy (4 registries x 2 call forms x 2 arities, plus 2
+yardsticks and 3 baselines) and 6 on each inplace hierarchy — plus 26 use-body
+ones (16 main-hierarchy dispatches and 2 yardsticks, 4 inplace dispatches and
+their own 2 x 2 yardsticks). The baselines are body-neutral and shared.
 
 Two compensations are applied, giving two columns:
 
@@ -109,7 +154,7 @@ the ratio to the virtual-function yardstick of the same arity.
 ### Warm caches — the sharpest numbers
 
 Nothing is evicted, so reaching the receiver is almost free: the `nvf` baseline
-costs 3.8 cycles more than `ovh`. `net` and `disp` therefore agree, and both are
+costs 3.7 cycles more than `ovh`. `net` and `disp` therefore agree, and both are
 stable to ~1 cycle run to run. The `inplace` rows are ratioed against the inplace
 hierarchy's own `vf`, which measures within a cycle of the main one.
 
@@ -117,62 +162,62 @@ Median of 7 passes.
 
 | dispatch | arity | disp | x vf |
 |---|---|---|---|
-| `vf` | 1 | 13.8 | 1.00x |
-| `om vptr / vptr_vector` | 1 | 16.1 | 1.14x |
-| `om ref / vptr_vector` | 1 | 17.6 | 1.27x |
-| `om vptr / indirect` | 1 | 19.0 | 1.36x |
-| `om ref / indirect` | 1 | 23.3 | 1.70x |
-| `om vptr / vptr_map` | 1 | 16.5 | 1.14x |
-| `om ref / vptr_map` | 1 | 25.7 | 1.78x |
-| `om vptr / flat_map` | 1 | 15.9 | 1.15x |
-| `om ref / flat_map` | 1 | 27.1 | 1.94x |
-| `om ref / inplace` | 1 | 12.4 | 0.89x |
-| `om ref / inplace_ind` | 1 | 16.9 | 1.26x |
-| `vf+vf (double dispatch)` | 2 | 16.1 | 1.00x |
-| `om vptr / vptr_vector` | 2 | 11.2 | 0.70x |
-| `om ref / vptr_vector` | 2 | 12.6 | 0.78x |
-| `om vptr / indirect` | 2 | 12.5 | 0.78x |
-| `om ref / indirect` | 2 | 15.1 | 0.94x |
-| `om vptr / vptr_map` | 2 | 11.2 | 0.70x |
-| `om ref / vptr_map` | 2 | 27.5 | 1.71x |
-| `om vptr / flat_map` | 2 | 11.2 | 0.70x |
-| `om ref / flat_map` | 2 | 25.7 | 1.59x |
-| `om ref / inplace` | 2 | 7.0 | 0.46x |
-| `om ref / inplace_ind` | 2 | 8.8 | 0.57x |
+| `vf` | 1 | 14.7 | 1.00x |
+| `om vptr / vptr_vector` | 1 | 16.4 | 1.15x |
+| `om ref / vptr_vector` | 1 | 18.4 | 1.23x |
+| `om vptr / indirect` | 1 | 19.8 | 1.32x |
+| `om ref / indirect` | 1 | 24.6 | 1.65x |
+| `om vptr / vptr_map` | 1 | 16.9 | 1.15x |
+| `om ref / vptr_map` | 1 | 25.7 | 1.79x |
+| `om vptr / flat_map` | 1 | 16.3 | 1.12x |
+| `om ref / flat_map` | 1 | 27.0 | 1.87x |
+| `om ref / inplace` | 1 | 12.4 | 0.84x |
+| `om ref / inplace_ind` | 1 | 18.0 | 1.20x |
+| `vf+vf (double dispatch)` | 2 | 23.8 | 1.00x |
+| `om vptr / vptr_vector` | 2 | 11.2 | 0.46x |
+| `om ref / vptr_vector` | 2 | 12.7 | 0.54x |
+| `om vptr / indirect` | 2 | 12.3 | 0.52x |
+| `om ref / indirect` | 2 | 15.2 | 0.63x |
+| `om vptr / vptr_map` | 2 | 11.2 | 0.46x |
+| `om ref / vptr_map` | 2 | 27.7 | 1.17x |
+| `om vptr / flat_map` | 2 | 11.2 | 0.46x |
+| `om ref / flat_map` | 2 | 25.6 | 1.08x |
+| `om ref / inplace` | 2 | 6.9 | 0.42x |
+| `om ref / inplace_ind` | 2 | 8.8 | 0.53x |
 
 ### Caches cold (`clflush`)
 
 Flushed, the first touch of the receiver is a cache miss in its own right: the
-`nvf` baseline costs 268 cycles more than `ovh`, against 577 for the whole `vf`
-yardstick. So 46% of a virtual call's `net` is reaching the object rather than
+`nvf` baseline costs 262 cycles more than `ovh`, against 582 for the whole `vf`
+yardstick. So 45% of a virtual call's `net` is reaching the object rather than
 dispatching on it — which is exactly what the `disp` column removes.
 
 Median of 7 passes.
 
 | dispatch | arity | net | disp | x net | x disp |
 |---|---|---|---|---|---|
-| `vf` | 1 | 577 | 304 | 1.00x | 1.00x |
-| `om vptr / vptr_vector` | 1 | 546 | 546 | 0.95x | 1.82x |
-| `om ref / vptr_vector` | 1 | 1158 | 891 | 2.05x | 2.99x |
-| `om vptr / indirect` | 1 | 565 | 565 | 1.00x | 1.85x |
-| `om ref / indirect` | 1 | 1358 | 1098 | 2.37x | 3.60x |
-| `om vptr / vptr_map` | 1 | 515 | 515 | 0.93x | 1.76x |
-| `om ref / vptr_map` | 1 | 784 | 536 | 1.41x | 1.78x |
-| `om vptr / flat_map` | 1 | 566 | 566 | 0.97x | 1.86x |
-| `om ref / flat_map` | 1 | 782 | 519 | 1.36x | 1.72x |
-| `om ref / inplace` | 1 | 563 | 316 | 1.05x | 1.11x |
-| `om ref / inplace_ind` | 1 | 738 | 506 | 1.44x | 1.79x |
-| `vf+vf (double dispatch)` | 2 | 666 | 347 | 1.00x | 1.00x |
-| `om vptr / vptr_vector` | 2 | 811 | 811 | 1.29x | 2.42x |
-| `om ref / vptr_vector` | 2 | 1441 | 1121 | 2.15x | 3.21x |
-| `om vptr / indirect` | 2 | 858 | 858 | 1.31x | 2.62x |
-| `om ref / indirect` | 2 | 1745 | 1414 | 2.61x | 4.11x |
-| `om vptr / vptr_map` | 2 | 783 | 783 | 1.21x | 2.36x |
-| `om ref / vptr_map` | 2 | 1150 | 823 | 1.74x | 2.44x |
-| `om vptr / flat_map` | 2 | 780 | 780 | 1.17x | 2.24x |
-| `om ref / flat_map` | 2 | 1146 | 828 | 1.77x | 2.45x |
-| `om ref / inplace` | 2 | 867 | 557 | 1.37x | 1.72x |
-| `om ref / inplace_ind` | 2 | 1037 | 743 | 1.68x | 2.29x |
+| `vf` | 1 | 582 | 317 | 1.00x | 1.00x |
+| `om vptr / vptr_vector` | 1 | 581 | 581 | 1.01x | 1.82x |
+| `om ref / vptr_vector` | 1 | 1177 | 914 | 2.08x | 2.94x |
+| `om vptr / indirect` | 1 | 646 | 646 | 1.10x | 2.05x |
+| `om ref / indirect` | 1 | 1320 | 1048 | 2.27x | 3.36x |
+| `om vptr / vptr_map` | 1 | 502 | 502 | 0.88x | 1.60x |
+| `om ref / vptr_map` | 1 | 815 | 553 | 1.42x | 1.78x |
+| `om vptr / flat_map` | 1 | 495 | 495 | 0.85x | 1.58x |
+| `om ref / flat_map` | 1 | 851 | 582 | 1.48x | 1.89x |
+| `om ref / inplace` | 1 | 626 | 392 | 1.27x | 1.50x |
+| `om ref / inplace_ind` | 1 | 807 | 574 | 1.54x | 2.02x |
+| `vf+vf (double dispatch)` | 2 | 682 | 361 | 1.00x | 1.00x |
+| `om vptr / vptr_vector` | 2 | 803 | 803 | 1.19x | 2.29x |
+| `om ref / vptr_vector` | 2 | 1381 | 1052 | 2.03x | 2.95x |
+| `om vptr / indirect` | 2 | 848 | 848 | 1.22x | 2.29x |
+| `om ref / indirect` | 2 | 1651 | 1323 | 2.39x | 3.65x |
+| `om vptr / vptr_map` | 2 | 796 | 796 | 1.16x | 2.21x |
+| `om ref / vptr_map` | 2 | 1140 | 824 | 1.68x | 2.28x |
+| `om vptr / flat_map` | 2 | 783 | 783 | 1.18x | 2.26x |
+| `om ref / flat_map` | 2 | 1173 | 851 | 1.73x | 2.38x |
+| `om ref / inplace` | 2 | 813 | 512 | 1.32x | 1.61x |
+| `om ref / inplace_ind` | 2 | 1140 | 849 | 1.83x | 2.54x |
 
 `net` and `disp` answer different questions, and the gap between the two columns
 is the point: subtract only the apparatus and you learn how much slower a cold
@@ -183,52 +228,175 @@ isolates the library.
 ### Reading it
 
 - **A `virtual_ptr` call costs about what a virtual function call does.**
-  Whole call against whole call, cold: `x net` 0.95x. Warm its `disp` — which
-  for vp rows is the whole net, nothing subtracted — is 1.14x the yardstick's
+  Whole call against whole call, cold: `x net` 1.01x. Warm its `disp` — which
+  for vp rows is the whole net, nothing subtracted — is 1.15x the yardstick's
   receiver-compensated dispatch. The v-table pointer is already in the pointer,
   so the dispatch is a slot load and an indirect call — the three-instruction
   sequence in `performance.adoc:91-93`, confirmed in the disassembly below.
   Cold, its `x disp` reads ~1.8x: that is not a slowdown but the corrected
   accounting — everything in a vp row's timed region is dispatch work, while
   the yardstick gets its receiver miss subtracted (see "What is measured").
-- **`virtual_` reference dispatch costs 1.27x a virtual call warm**, landing in
+- **`virtual_` reference dispatch costs 1.23x a virtual call warm**, landing in
   the documented "30% to 50% slower" band. Cold and fully compensated it is
   roughly three times a virtual call, because the hash-and-look-up that builds the v-table pointer touches
   three more cache lines (the `type_info`, the vptr vector, the method slot),
   and each is its own miss.
 - **At two virtual arguments the open-method beats the double dispatch idiom**
-  outright, on `vptr_vector`: 0.78x warm through a reference, 0.70x through
-  `virtual_ptr`. Double dispatch pays two *dependent* virtual calls, which
+  outright, on `vptr_vector`: 0.54x warm through a reference, 0.46x through
+  `virtual_ptr` — margins that swing with the arity-2 yardstick's own
+  run-to-run variance, but never to the idiom's advantage. Double dispatch
+  pays two *dependent* virtual calls, which
   cannot overlap; the multi-method issues two independent hash chains and
   indexes one two-dimensional table.
 - **`vptr_map` costs about 1.45x `vptr_vector`** on the reference path warm
-  (1.78x vs 1.27x of the yardstick). `boost::unordered_flat_map` is **not** a
-  clear improvement on `std::unordered_map`: 1.94x vs 1.78x warm, and the two
+  (1.79x vs 1.23x of the yardstick). `boost::unordered_flat_map` is **not** a
+  clear improvement on `std::unordered_map`: 1.87x vs 1.79x warm, and the two
   stay within run-to-run variance of each other cold as well, with the sign of
   the difference flipping between builds. Once a DRAM miss is on the critical path
   the container's probe strategy stops mattering much.
 - **`inplace_vptr` makes reference dispatch as cheap as `virtual_ptr`
   dispatch** — which is the whole claim of the feature, and it holds exactly:
-  12.4 cycles / 0.89x through a reference — at parity with the virtual
-  function itself, and at arity 2, 0.46x of double dispatch. Compared with a
-  *reference* on `vptr_vector` (17.6 / 1.27x) it saves 5.2 cycles, the entire
-  hash-and-look-up. Cold it is 1.11x a virtual call against the reference
-  form's 2.99x, because it removes three of the four lines the lookup touches.
+  12.4 cycles / 0.84x through a reference — at or below the virtual
+  function itself, and at arity 2, 0.42x of double dispatch. Compared with a
+  *reference* on `vptr_vector` (18.4 / 1.23x) it saves 6.0 cycles, the entire
+  hash-and-look-up. Cold it is 1.50x a virtual call against the reference
+  form's 2.94x, because it removes three of the four lines the lookup touches.
   The cost is 8 bytes per object and a hierarchy committed to one registry.
 - **`indirect_vptr` costs about 3 cycles through a `virtual_ptr` and 6 through a
-  reference**, warm: 16.1 -> 19.0 and 17.6 -> 23.3 on gcc/64, taking
-  `virtual_ptr` dispatch from 1.14x a virtual call to 1.36x. The disassembly
+  reference**, warm: 16.4 -> 19.8 and 18.4 -> 24.6 on gcc/64, taking
+  `virtual_ptr` dispatch from 1.15x a virtual call to 1.32x. The disassembly
   shows exactly one extra instruction, `mov rax, QWORD PTR [rax]` — the second
   dereference — in both call forms. It costs more on the reference path because
   there it lands at the end of an already-long dependency chain and has nothing
-  to overlap with. Cold, the reference path pays a full miss for it (891 ->
-  1098 on gcc/64): the extra indirection is a cache line of its own.
+  to overlap with. Cold, the reference path pays a full miss for it (914 ->
+  1048 on gcc/64): the extra indirection is a cache line of its own.
 - The dispatch axis is **irrelevant to `virtual_ptr` dispatch** among the three
-  *direct* registries, as it must be: 1.14x / 1.14x / 1.15x warm. That is the
+  *direct* registries, as it must be: 1.15x / 1.15x / 1.12x warm. That is the
   harness's built-in control — the vptr policy is not on that call path, so if
   those three rows diverge, the measurement is wrong, not the library.
   `indirect` is deliberately excluded from the control: it *does* add work to
   that path (a load), which is the whole point of the section below.
+
+## Two fair comparisons
+
+A virtual function call *must* load the receiver: the v-table pointer lives in
+the object. So must `virtual_` reference dispatch — its hash chain starts from
+the object's v-table pointer. A `virtual_ptr` call alone can dispatch without
+ever touching the object, because the v-table pointer travels in the fat
+pointer. That asymmetry is the design, not an artifact, and it means no single
+statistic is fair to both sides:
+
+- Subtract the receiver-touch (`disp = mean − nvf`) from everything, and the
+  virtual function gets part of *its own dispatch mechanism* excused — the load
+  it is charged for IS the vptr fetch.
+- Subtract it from nothing, and the comparison charges `virtual_ptr` full price
+  for its table misses while ignoring that in real code its receiver miss is
+  not avoided but *deferred* — the body pays it instead.
+
+So the benchmark measures two worlds, with two yardsticks:
+
+**The delivery world** (`body = const`, every table above): bodies return
+compile-time constants; the receiver is touched only where the mechanism
+requires it. This is not a lab construct — it is the no-op-default pattern from
+"Where the v-table pointer lives", where call overhead is the entire cost of
+the call. It is `virtual_ptr`'s best case — dispatch without the object — and
+the fair cross-form statistic is `net` against `net`.
+
+**The use world** (`body = use`, tables below): every overrider and virtual
+body reads a member of every receiver, as bodies that operate on the object
+do. Now every call form owes the receiver's cache line exactly once, and
+`disp = mean − nvf` is fair for every row including `virtual_ptr`.
+
+One caution about what the use world means. The benchmark measures the *call
+mechanism*, not bodies; the member reads exist to make the receiver line's
+movement visible, not to bill the mechanism for the body's work. The virtual
+function's mandatory receiver load doubles as a prefetch for its body — a real
+effect, but a property of what surrounds the call. The measurable question the
+use world answers is where the `virtual_ptr` body's deferred receiver miss
+lands: serialized behind the table misses, or overlapped under them if
+speculation across the indirect call reaches the body's load. That is
+microarchitecture, not arithmetic; the tables answer it.
+
+#### Warm, receiver used
+
+Median of 7 passes.
+
+| dispatch | arity | disp | x vf |
+|---|---|---|---|
+| `vf` | 1 | 14.9 | 1.00x |
+| `om vptr / vptr_vector` | 1 | 13.0 | 0.87x |
+| `om ref / vptr_vector` | 1 | 18.4 | 1.24x |
+| `om vptr / indirect` | 1 | 16.7 | 1.20x |
+| `om ref / indirect` | 1 | 24.6 | 1.67x |
+| `om vptr / vptr_map` | 1 | 12.9 | 0.87x |
+| `om ref / vptr_map` | 1 | 27.5 | 1.85x |
+| `om vptr / flat_map` | 1 | 12.8 | 0.87x |
+| `om ref / flat_map` | 1 | 27.0 | 1.83x |
+| `om ref / inplace` | 1 | 12.6 | 0.85x |
+| `om ref / inplace_ind` | 1 | 17.9 | 1.20x |
+| `vf+vf (double dispatch)` | 2 | 17.4 | 1.00x |
+| `om vptr / vptr_vector` | 2 | 6.9 | 0.40x |
+| `om ref / vptr_vector` | 2 | 12.7 | 0.75x |
+| `om vptr / indirect` | 2 | 8.2 | 0.48x |
+| `om ref / indirect` | 2 | 15.0 | 0.89x |
+| `om vptr / vptr_map` | 2 | 6.9 | 0.40x |
+| `om ref / vptr_map` | 2 | 27.8 | 1.60x |
+| `om vptr / flat_map` | 2 | 6.9 | 0.40x |
+| `om ref / flat_map` | 2 | 25.7 | 1.48x |
+| `om ref / inplace` | 2 | 6.9 | 0.40x |
+| `om ref / inplace_ind` | 2 | 8.9 | 0.54x |
+
+#### Cold (`clflush`), receiver used
+
+Median of 7 passes.
+
+| dispatch | arity | net | disp | x net | x disp |
+|---|---|---|---|---|---|
+| `vf` | 1 | 513 | 248 | 1.00x | 1.00x |
+| `om vptr / vptr_vector` | 1 | 533 | 269 | 1.04x | 1.09x |
+| `om ref / vptr_vector` | 1 | 1109 | 847 | 2.13x | 3.40x |
+| `om vptr / indirect` | 1 | 643 | 369 | 1.24x | 1.49x |
+| `om ref / indirect` | 1 | 1322 | 1059 | 2.56x | 4.22x |
+| `om vptr / vptr_map` | 1 | 537 | 262 | 1.04x | 1.08x |
+| `om ref / vptr_map` | 1 | 824 | 562 | 1.62x | 2.27x |
+| `om vptr / flat_map` | 1 | 522 | 260 | 1.02x | 1.05x |
+| `om ref / flat_map` | 1 | 841 | 575 | 1.62x | 2.35x |
+| `om ref / inplace` | 1 | 659 | 443 | 1.30x | 1.53x |
+| `om ref / inplace_ind` | 1 | 813 | 568 | 1.59x | 2.18x |
+| `vf+vf (double dispatch)` | 2 | 621 | 297 | 1.00x | 1.00x |
+| `om vptr / vptr_vector` | 2 | 818 | 490 | 1.33x | 1.70x |
+| `om ref / vptr_vector` | 2 | 1405 | 1077 | 2.29x | 3.70x |
+| `om vptr / indirect` | 2 | 840 | 512 | 1.37x | 1.74x |
+| `om ref / indirect` | 2 | 1654 | 1327 | 2.69x | 4.62x |
+| `om vptr / vptr_map` | 2 | 807 | 485 | 1.30x | 1.62x |
+| `om ref / vptr_map` | 2 | 1169 | 846 | 1.88x | 2.82x |
+| `om vptr / flat_map` | 2 | 822 | 478 | 1.30x | 1.62x |
+| `om ref / flat_map` | 2 | 1163 | 832 | 1.85x | 2.79x |
+| `om ref / inplace` | 2 | 807 | 505 | 1.29x | 1.56x |
+| `om ref / inplace_ind` | 2 | 1149 | 856 | 1.85x | 2.60x |
+
+### What the use world shows
+
+- **With the receiver used, `virtual_ptr` is at parity with the virtual
+  function, cold, with no accounting caveat left**: 1.04x
+  whole call against whole call, 1.09x dispatch against
+  dispatch — and now `disp` subtracts the same receiver miss from both sides
+  legitimately, because both sides pay it. Warm it is 0.87x.
+- **The deferred receiver miss costs `virtual_ptr` nothing.** Its cold net is
+  581 cycles with a body that never touches the object
+  and 533 with a body that reads it — while a lone receiver
+  miss costs 262. The miss disappears under the table misses:
+  the object address sits in the fat pointer from the first cycle, and with the
+  indirect target predicted (any call site as predictable as this one), the
+  body's load issues while the v-table line is still in flight.
+- **The virtual function's prefetch buys it nothing here.** Its body read rides
+  the line its own dispatch fetched — free, as expected — but `virtual_ptr`'s
+  overlap makes *its* body read free too. The structural advantage the receiver
+  load was supposed to confer evaporates.
+- Taken together with the delivery world: **in the no-op world `virtual_ptr`
+  wins by not loading the object; in the use world it draws by hiding the
+  load.** There is no workload among these where carrying the v-table pointer
+  in the object beats carrying it in the pointer.
 
 ## Cost of `indirect_vptr`
 
@@ -270,30 +438,30 @@ Median of 7 passes; `disp` cycles, direct → indirect.
 
 | call form | arity | gcc/64 | gcc/32 | clang/64 | clang/32 |
 |---|---|---|---|---|---|
-| `virtual_ptr` | 1 | 16.1 → 19.0 (**+3.0**) | 15.1 → 19.1 (**+4.0**) | 15.5 → 16.6 (**+1.1**) | 17.7 → 20.7 (**+3.0**) |
-| `virtual_ptr` | 2 | 11.2 → 12.5 (**+1.2**) | 11.1 → 13.6 (**+2.5**) | 8.7 → 10.3 (**+1.6**) | 18.4 → 19.9 (**+1.5**) |
-| `virtual_` ref | 1 | 17.6 → 23.3 (**+5.7**) | 16.6 → 22.5 (**+5.8**) | 18.4 → 23.6 (**+5.2**) | 21.9 → 23.8 (**+1.9**) |
-| `virtual_` ref | 2 | 12.6 → 15.1 (**+2.6**) | 13.9 → 16.6 (**+2.7**) | 13.5 → 15.3 (**+1.8**) | 13.4 → 15.5 (**+2.1**) |
-| `inplace` ref | 1 | 12.4 → 16.9 (**+4.5**) | 9.8 → 15.9 (**+6.1**) | 11.5 → 16.6 (**+5.1**) | 13.0 → 17.3 (**+4.3**) |
-| `inplace` ref | 2 | 7.0 → 8.8 (**+1.8**) | 6.9 → 8.2 (**+1.3**) | 6.4 → 8.5 (**+2.1**) | 6.8 → 8.8 (**+2.0**) |
+| `virtual_ptr` | 1 | 16.4 → 19.8 (**+3.4**) | 17.9 → 19.4 (**+1.6**) | 14.9 → 15.8 (**+0.8**) | 18.2 → 21.9 (**+3.8**) |
+| `virtual_ptr` | 2 | 11.2 → 12.3 (**+1.2**) | 11.1 → 13.4 (**+2.3**) | 8.7 → 10.4 (**+1.7**) | 18.6 → 20.1 (**+1.4**) |
+| `virtual_` ref | 1 | 18.4 → 24.6 (**+6.2**) | 20.3 → 23.8 (**+3.5**) | 18.3 → 23.3 (**+5.1**) | 20.1 → 25.5 (**+5.4**) |
+| `virtual_` ref | 2 | 12.7 → 15.2 (**+2.5**) | 13.7 → 16.4 (**+2.7**) | 13.7 → 15.7 (**+2.0**) | 13.4 → 15.6 (**+2.2**) |
+| `inplace` ref | 1 | 12.4 → 18.0 (**+5.6**) | 10.6 → 16.8 (**+6.2**) | 11.7 → 16.4 (**+4.7**) | 12.5 → 19.5 (**+7.0**) |
+| `inplace` ref | 2 | 6.9 → 8.8 (**+2.0**) | 6.9 → 8.2 (**+1.4**) | 6.3 → 8.3 (**+2.1**) | 7.0 → 8.9 (**+1.9**) |
 
 #### Cold (`clflush`) — the extra load, as a cache miss
 
 | call form | arity | gcc/64 | gcc/32 | clang/64 | clang/32 |
 |---|---|---|---|---|---|
-| `virtual_ptr` | 1 | 546 → 565 (**+20**) | 614 → 569 (**-45**) | 550 → 571 (**+22**) | 618 → 562 (**-56**) |
-| `virtual_ptr` | 2 | 811 → 858 (**+46**) | 892 → 878 (**-13**) | 843 → 956 (**+114**) | 887 → 976 (**+90**) |
-| `virtual_` ref | 1 | 891 → 1098 (**+207**) | 890 → 1085 (**+195**) | 898 → 1049 (**+151**) | 893 → 1045 (**+152**) |
-| `virtual_` ref | 2 | 1121 → 1414 (**+293**) | 1219 → 1374 (**+154**) | 1141 → 1332 (**+191**) | 1261 → 1322 (**+60**) |
-| `inplace` ref | 1 | 316 → 506 (**+190**) | 284 → 560 (**+276**) | 333 → 487 (**+155**) | 317 → 555 (**+238**) |
-| `inplace` ref | 2 | 557 → 743 (**+186**) | 508 → 830 (**+323**) | 539 → 770 (**+231**) | 542 → 802 (**+260**) |
+| `virtual_ptr` | 1 | 581 → 646 (**+65**) | 528 → 538 (**+10**) | 595 → 561 (**-34**) | 541 → 562 (**+21**) |
+| `virtual_ptr` | 2 | 803 → 848 (**+45**) | 821 → 919 (**+98**) | 802 → 845 (**+44**) | 816 → 876 (**+60**) |
+| `virtual_` ref | 1 | 914 → 1048 (**+134**) | 858 → 1111 (**+253**) | 885 → 1057 (**+172**) | 914 → 1084 (**+170**) |
+| `virtual_` ref | 2 | 1052 → 1323 (**+271**) | 1187 → 1440 (**+253**) | 1053 → 1333 (**+280**) | 1128 → 1372 (**+244**) |
+| `inplace` ref | 1 | 392 → 574 (**+183**) | 304 → 564 (**+260**) | 355 → 541 (**+186**) | 364 → 591 (**+227**) |
+| `inplace` ref | 2 | 512 → 849 (**+337**) | 581 → 862 (**+281**) | 510 → 843 (**+333**) | 595 → 821 (**+226**) |
 
 ### Reading it
 
-- **Warm, it costs 1 to 4 cycles through a `virtual_ptr` and 2 to 6 through a
-  reference.** In yardstick terms that takes `virtual_ptr` dispatch from 1.14x
-  a virtual function call to 1.36x on gcc/64. For the reference form it is
-  1.27x → 1.70x.
+- **Warm, it costs 1 to 4 cycles through a `virtual_ptr` and 3 to 6 through a
+  reference.** In yardstick terms that takes `virtual_ptr` dispatch from 1.15x
+  a virtual function call to 1.32x on gcc/64. For the reference form it is
+  1.23x → 1.65x.
 - **It costs more on the reference path than the `virtual_ptr` path**, roughly
   double, in every build. On the reference path the extra load sits at the end
   of an already-long dependency chain (object → `type_info` → hash → vptr vector
@@ -304,7 +472,7 @@ Median of 7 passes; `disp` cycles, direct → indirect.
   separate line from everything else the dispatch touches, so it is a miss of
   its own.
 - **Cold through a `virtual_ptr` it is nearly free at arity 1** — the four
-  builds measure +20, −45, +22 and −56 cycles against nets of ~550: no
+  builds measure +65, +10, -34, +21 cycles against nets of ~550: no
   consistent sign. That is partly noise (the cold spread swamps it), but there is a
   real mechanism too: the indirection load and the method's slot load are
   independent of each other, so the two misses overlap. On the reference path
@@ -316,15 +484,15 @@ Median of 7 passes; `disp` cycles, direct → indirect.
 
 The same policy applies to an `inplace_vptr` hierarchy, where it changes the
 *stored* member from a `vptr_type` to a `const vptr_type*`. The cost is the same
-shape and slightly larger: warm on gcc/64, `inplace` goes 12.4 → 16.9 cycles at
-arity 1 and 7.0 → 8.8 at arity 2. So an
+shape and slightly larger: warm on gcc/64, `inplace` goes 12.4 → 18.0 cycles at
+arity 1 and 6.9 → 8.8 at arity 2. So an
 indirect inplace dispatch lands about where a *direct* `vptr_vector` reference
 dispatch does, giving up most of what `inplace_vptr` won.
 
 ### When it is worth it
 
-Arity 2 through a `virtual_ptr` costs +1.2 to +2.5 cycles warm, on a dispatch
-that is already 0.70x the cost of the double-dispatch idiom — so an
+Arity 2 through a `virtual_ptr` costs +1.2 to +2.3 cycles warm, on a dispatch
+that is already 0.46x the cost of the double-dispatch idiom — so an
 `indirect_registry` multi-method still beats hand-written double dispatch by a
 wide margin. The policy is cheap where dispatch is cheap, and dearest exactly
 where dispatch is already dearest (cold, through a reference). If the program
@@ -358,69 +526,69 @@ since upstream CI covers 32-bit on MSVC only (`ADDRMD: '32,64'` in
 | dispatch | gcc/64 | gcc/32 | clang/64 | clang/32 |
 |---|---|---|---|---|
 | **1 virtual argument** |  |  |  |  |
-| `vf (yardstick)` | 1.00x (304) | 1.00x (299) | 1.00x (295) | 1.00x (299) |
-| `om vptr / vptr_vector` | 1.82x (546) | 2.10x (614) | 1.86x (550) | 2.07x (618) |
-| `om ref / vptr_vector` | 2.99x (891) | 3.02x (890) | 2.90x (898) | 3.04x (893) |
-| `om vptr / indirect` | 1.85x (565) | 2.14x (569) | 1.89x (571) | 1.88x (562) |
-| `om ref / indirect` | 3.60x (1098) | 3.65x (1085) | 3.46x (1049) | 3.59x (1045) |
-| `om vptr / vptr_map` | 1.76x (515) | 1.83x (554) | 1.74x (561) | 2.01x (600) |
-| `om ref / vptr_map` | 1.78x (536) | 2.11x (601) | 1.71x (520) | 2.01x (599) |
-| `om vptr / flat_map` | 1.86x (566) | 1.92x (537) | 1.79x (521) | 1.89x (544) |
-| `om ref / flat_map` | 1.72x (519) | 2.12x (632) | 1.62x (517) | 2.04x (598) |
-| `om ref / inplace` | 1.11x (316) | 1.01x (284) | 1.13x (333) | 1.11x (317) |
-| `om ref / inplace_ind` | 1.79x (506) | 2.01x (560) | 1.78x (487) | 1.90x (555) |
+| `vf (yardstick)` | 1.00x (317) | 1.00x (304) | 1.00x (303) | 1.00x (325) |
+| `om vptr / vptr_vector` | 1.82x (581) | 1.74x (528) | 1.92x (595) | 1.70x (541) |
+| `om ref / vptr_vector` | 2.94x (914) | 2.86x (858) | 2.83x (885) | 2.71x (914) |
+| `om vptr / indirect` | 2.05x (646) | 1.80x (538) | 1.80x (561) | 1.70x (562) |
+| `om ref / indirect` | 3.36x (1048) | 3.73x (1111) | 3.46x (1057) | 3.41x (1084) |
+| `om vptr / vptr_map` | 1.60x (502) | 1.72x (519) | 1.67x (508) | 1.67x (544) |
+| `om ref / vptr_map` | 1.78x (553) | 1.64x (501) | 1.79x (560) | 1.57x (523) |
+| `om vptr / flat_map` | 1.58x (495) | 1.81x (554) | 1.65x (507) | 1.65x (529) |
+| `om ref / flat_map` | 1.89x (582) | 1.73x (525) | 1.80x (561) | 1.59x (520) |
+| `om ref / inplace` | 1.50x (392) | 1.14x (304) | 1.24x (355) | 1.34x (364) |
+| `om ref / inplace_ind` | 2.02x (574) | 2.08x (564) | 1.83x (541) | 1.97x (591) |
 | **2 virtual arguments** |  |  |  |  |
-| `vf+vf (yardstick)` | 1.00x (347) | 1.00x (331) | 1.00x (424) | 1.00x (383) |
-| `om vptr / vptr_vector` | 2.42x (811) | 2.51x (892) | 2.11x (843) | 2.36x (887) |
-| `om ref / vptr_vector` | 3.21x (1121) | 3.41x (1219) | 2.78x (1141) | 3.37x (1261) |
-| `om vptr / indirect` | 2.62x (858) | 2.65x (878) | 2.22x (956) | 2.58x (976) |
-| `om ref / indirect` | 4.11x (1414) | 4.14x (1374) | 3.12x (1332) | 3.49x (1322) |
-| `om vptr / vptr_map` | 2.36x (783) | 2.27x (784) | 1.97x (829) | 2.23x (808) |
-| `om ref / vptr_map` | 2.44x (823) | 2.35x (822) | 2.03x (827) | 2.33x (849) |
-| `om vptr / flat_map` | 2.24x (780) | 2.33x (797) | 1.84x (802) | 2.07x (789) |
-| `om ref / flat_map` | 2.45x (828) | 2.51x (858) | 2.00x (834) | 2.15x (813) |
-| `om ref / inplace` | 1.72x (557) | 1.57x (508) | 1.41x (539) | 1.61x (542) |
-| `om ref / inplace_ind` | 2.29x (743) | 2.46x (830) | 1.61x (770) | 2.46x (802) |
+| `vf+vf (yardstick)` | 1.00x (361) | 1.00x (371) | 1.00x (383) | 1.00x (358) |
+| `om vptr / vptr_vector` | 2.29x (803) | 2.21x (821) | 2.17x (802) | 2.27x (816) |
+| `om ref / vptr_vector` | 2.95x (1052) | 3.17x (1187) | 2.69x (1053) | 3.17x (1128) |
+| `om vptr / indirect` | 2.29x (848) | 2.57x (919) | 2.22x (845) | 2.46x (876) |
+| `om ref / indirect` | 3.65x (1323) | 3.88x (1440) | 3.43x (1333) | 3.89x (1372) |
+| `om vptr / vptr_map` | 2.21x (796) | 2.13x (792) | 2.05x (788) | 2.22x (793) |
+| `om ref / vptr_map` | 2.28x (824) | 2.26x (840) | 2.16x (800) | 2.39x (829) |
+| `om vptr / flat_map` | 2.26x (783) | 2.12x (781) | 2.11x (808) | 2.19x (785) |
+| `om ref / flat_map` | 2.38x (851) | 2.45x (869) | 2.20x (845) | 2.35x (833) |
+| `om ref / inplace` | 1.61x (512) | 1.75x (581) | 1.33x (510) | 1.72x (595) |
+| `om ref / inplace_ind` | 2.54x (849) | 2.60x (862) | 1.85x (843) | 2.44x (821) |
 
-Median of 7 passes. Spread across passes: median 24%, p90 39%.
+Median of 7 passes. Spread across passes: median 21%, p90 35%.
 
 #### Warm caches
 
 | dispatch | gcc/64 | gcc/32 | clang/64 | clang/32 |
 |---|---|---|---|---|
 | **1 virtual argument** |  |  |  |  |
-| `vf (yardstick)` | 1.00x (13.8) | 1.00x (13.6) | 1.00x (11.2) | 1.00x (15.5) |
-| `om vptr / vptr_vector` | 1.14x (16.1) | 1.13x (15.1) | 1.34x (15.5) | 1.16x (17.7) |
-| `om ref / vptr_vector` | 1.27x (17.6) | 1.25x (16.6) | 1.58x (18.4) | 1.42x (21.9) |
-| `om vptr / indirect` | 1.36x (19.0) | 1.44x (19.1) | 1.45x (16.6) | 1.37x (20.7) |
-| `om ref / indirect` | 1.70x (23.3) | 1.70x (22.5) | 2.07x (23.6) | 1.57x (23.8) |
-| `om vptr / vptr_map` | 1.14x (16.5) | 1.09x (15.1) | 1.18x (13.7) | 1.10x (17.1) |
-| `om ref / vptr_map` | 1.78x (25.7) | 1.85x (25.4) | 2.33x (27.2) | 1.78x (27.5) |
-| `om vptr / flat_map` | 1.15x (15.9) | 1.13x (15.0) | 1.18x (13.7) | 1.10x (16.9) |
-| `om ref / flat_map` | 1.94x (27.1) | 1.92x (25.5) | 2.62x (30.6) | 1.99x (30.9) |
-| `om ref / inplace` | 0.89x (12.4) | 0.75x (9.8) | 0.90x (11.5) | 1.11x (13.0) |
-| `om ref / inplace_ind` | 1.26x (16.9) | 1.22x (15.9) | 1.33x (16.6) | 1.44x (17.3) |
+| `vf (yardstick)` | 1.00x (14.7) | 1.00x (11.7) | 1.00x (11.1) | 1.00x (14.0) |
+| `om vptr / vptr_vector` | 1.15x (16.4) | 1.51x (17.9) | 1.35x (14.9) | 1.31x (18.2) |
+| `om ref / vptr_vector` | 1.23x (18.4) | 1.73x (20.3) | 1.58x (18.3) | 1.50x (20.1) |
+| `om vptr / indirect` | 1.32x (19.8) | 1.66x (19.4) | 1.44x (15.8) | 1.53x (21.9) |
+| `om ref / indirect` | 1.65x (24.6) | 2.05x (23.8) | 2.09x (23.3) | 1.79x (25.5) |
+| `om vptr / vptr_map` | 1.15x (16.9) | 1.33x (15.6) | 1.14x (12.9) | 1.27x (17.4) |
+| `om ref / vptr_map` | 1.79x (25.7) | 2.16x (25.1) | 2.34x (26.6) | 1.93x (26.3) |
+| `om vptr / flat_map` | 1.12x (16.3) | 1.33x (15.5) | 1.14x (13.0) | 1.25x (17.0) |
+| `om ref / flat_map` | 1.87x (27.0) | 2.18x (25.2) | 2.66x (30.2) | 2.23x (31.0) |
+| `om ref / inplace` | 0.84x (12.4) | 0.89x (10.6) | 0.93x (11.7) | 0.99x (12.5) |
+| `om ref / inplace_ind` | 1.20x (18.0) | 1.48x (16.8) | 1.31x (16.4) | 1.62x (19.5) |
 | **2 virtual arguments** |  |  |  |  |
-| `vf+vf (yardstick)` | 1.00x (16.1) | 1.00x (19.2) | 1.00x (16.2) | 1.00x (25.9) |
-| `om vptr / vptr_vector` | 0.70x (11.2) | 0.58x (11.1) | 0.54x (8.7) | 0.71x (18.4) |
-| `om ref / vptr_vector` | 0.78x (12.6) | 0.72x (13.9) | 0.84x (13.5) | 0.52x (13.4) |
-| `om vptr / indirect` | 0.78x (12.5) | 0.71x (13.6) | 0.63x (10.3) | 0.77x (19.9) |
-| `om ref / indirect` | 0.94x (15.1) | 0.86x (16.6) | 0.94x (15.3) | 0.60x (15.5) |
-| `om vptr / vptr_map` | 0.70x (11.2) | 0.58x (11.1) | 0.54x (8.7) | 0.71x (18.5) |
-| `om ref / vptr_map` | 1.71x (27.5) | 1.26x (24.2) | 1.61x (26.4) | 1.06x (27.4) |
-| `om vptr / flat_map` | 0.70x (11.2) | 0.58x (11.1) | 0.55x (8.8) | 0.72x (18.4) |
-| `om ref / flat_map` | 1.59x (25.7) | 1.38x (26.9) | 1.72x (28.1) | 1.19x (30.9) |
-| `om ref / inplace` | 0.46x (7.0) | 0.36x (6.9) | 0.38x (6.4) | 0.27x (6.8) |
-| `om ref / inplace_ind` | 0.57x (8.8) | 0.43x (8.2) | 0.51x (8.5) | 0.35x (8.8) |
+| `vf+vf (yardstick)` | 1.00x (23.8) | 1.00x (19.0) | 1.00x (16.0) | 1.00x (24.6) |
+| `om vptr / vptr_vector` | 0.46x (11.2) | 0.59x (11.1) | 0.54x (8.7) | 0.76x (18.6) |
+| `om ref / vptr_vector` | 0.54x (12.7) | 0.73x (13.7) | 0.86x (13.7) | 0.54x (13.4) |
+| `om vptr / indirect` | 0.52x (12.3) | 0.71x (13.4) | 0.64x (10.4) | 0.82x (20.1) |
+| `om ref / indirect` | 0.63x (15.2) | 0.87x (16.4) | 0.98x (15.7) | 0.64x (15.6) |
+| `om vptr / vptr_map` | 0.46x (11.2) | 0.59x (11.1) | 0.54x (8.7) | 0.75x (18.5) |
+| `om ref / vptr_map` | 1.17x (27.7) | 1.29x (24.2) | 1.64x (26.1) | 1.11x (27.3) |
+| `om vptr / flat_map` | 0.46x (11.2) | 0.59x (11.1) | 0.55x (8.8) | 0.75x (18.5) |
+| `om ref / flat_map` | 1.08x (25.6) | 1.40x (26.5) | 1.77x (28.2) | 1.24x (30.7) |
+| `om ref / inplace` | 0.42x (6.9) | 0.36x (6.9) | 0.38x (6.3) | 0.28x (7.0) |
+| `om ref / inplace_ind` | 0.53x (8.8) | 0.45x (8.2) | 0.40x (8.3) | 0.35x (8.9) |
 
-Median of 7 passes. Spread across passes: median 9%, p90 48%.
+Median of 7 passes. Spread across passes: median 11%, p90 63%.
 
 ### What it shows
 
 - **Bitness buys a little warm, and nothing cold.** Warm, `om ref /
-  vptr_vector` goes 1.27x -> 1.25x (gcc) and 1.58x -> 1.42x (clang) at `-m32`,
-  with the absolute cycles dropping too (17.6 -> 16.6 on gcc). Cold, the
-  *cycles* barely move (891 -> 890 on gcc) while the ratios shift with the
+  vptr_vector` goes 1.23x -> 1.73x (gcc) and 1.58x -> 1.50x (clang) at `-m32`,
+  with the absolute cycles moving little (18.4 -> 20.3 on gcc). Cold, the
+  *cycles* barely move (914 -> 858 on gcc) while the ratios shift with the
   yardstick. Halving the tables does not help when misses are
   counted per line rather than per byte: at 100 classes the hot part of the
   dispatch data already occupies few enough lines that 4-byte cells buy no fewer
@@ -442,8 +610,7 @@ Median of 7 passes. Spread across passes: median 9%, p90 48%.
   That is the extra load, and it is the price of being able to replace v-tables
   after `initialize()` without rebuilding every `virtual_ptr` in flight.
 - **`inplace` is the fastest dispatch in the table, in every build**, and the
-  fastest reference dispatch in every column — at or below the virtual
-  function itself in three of the four builds — against roughly half again as
+  fastest reference dispatch in every column, against roughly half again as
   much for a reference on `vptr_vector`.
 - **The one outlier is a benchmark artifact, not a library cost.** clang/32
   reports `om vptr` at arity 2 as roughly twice what the other three builds do,
@@ -592,7 +759,7 @@ columns alike instead of favouring whichever ran first.
 Even so, read the cold table for the large effects only. The built-in control
 says how far to trust it: the three *direct* registries' `om vptr` rows must
 agree, since the vptr policy is off that call path (`indirect` is excluded — it
-adds a load there by design). Cold their nets agree to within 7-14% in every
+adds a load there by design). Cold their nets agree to within 3-16% per
 column. Warm is far better behaved — a few percent, and
 the arity-2 control is exact (11.2 / 11.2 / 11.2 cycles on gcc/64).
 
@@ -761,9 +928,9 @@ as the CMake test.
   "mean of quantized samples" to true latency depends on where the work falls
   relative to the tick boundary, and that phase differs between instruction
   schedules. Symptom: warm mode reports arity 2 as *cheaper* than arity 1 for
-  `virtual_` ref (12.6 vs 17.6), which is impossible — the 2-argument dispatch
+  `virtual_` ref (12.7 vs 18.4), which is impossible — the 2-argument dispatch
   strictly does more work, as the disassembly below shows. The cold modes order
-  them correctly (891 < 1121 under `clflush`). Use
+  them correctly (914 < 1052 under `clflush`). Use
   warm mode to separate things that differ by a lot, not by a few cycles.
 - **`nvf` is a lower bound on "reaching the receiver", not an exact one.** It
   reads `tag` at offset 8; a dispatch reads the v-table pointer at offset 0.

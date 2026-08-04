@@ -40,8 +40,17 @@ struct Base {
         return x + tag;
     }
 
-    // 1-argument yardstick: one virtual call.
+    // 1-argument yardstick: one virtual call. The body returns a constant:
+    // the receiver is loaded only because virtual dispatch has to (the vptr
+    // lives in it).
     virtual auto vf(int) const -> int = 0;
+
+    // Use-flavored yardstick: same call, but the body READS the receiver.
+    // Pairs with the use-flavored methods, where every body reads a member of
+    // every receiver, so `disp = mean - nvf` is fair for all call forms --
+    // including virtual_ptr, which pays its receiver miss in the body instead
+    // of in the dispatch. See README, "Two fair comparisons".
+    virtual auto vfu(int) const -> int = 0;
 
     // 2-argument yardstick: the double dispatch idiom. `dd` is the first
     // dispatch, `dd_with` the second. Two chained virtual calls, which is what
@@ -52,6 +61,11 @@ struct Base {
     // cost, which is two virtual calls either way. See README.
     virtual auto dd(const Base&, int) const -> int = 0;
     virtual auto dd_with(const Base&, int) const -> int = 0;
+
+    // Use-flavored double dispatch: dd_withu's body reads a member of BOTH
+    // receivers. Contract: x + a.tag + b.tag.
+    virtual auto ddu(const Base&, int) const -> int = 0;
+    virtual auto dd_withu(const Base&, int) const -> int = 0;
 
     int tag;
 };
@@ -65,12 +79,24 @@ struct Derived : Base {
         return x + static_cast<int>(N);
     }
 
+    auto vfu(int x) const -> int override {
+        return x + tag; // member read: the use-world body
+    }
+
     auto dd(const Base& other, int x) const -> int override {
         return other.dd_with(*this, x);
     }
 
     auto dd_with(const Base&, int x) const -> int override {
         return x + static_cast<int>(N);
+    }
+
+    auto ddu(const Base& other, int x) const -> int override {
+        return other.dd_withu(*this, x);
+    }
+
+    auto dd_withu(const Base& other, int x) const -> int override {
+        return x + tag + other.tag; // reads both receivers
     }
 };
 
@@ -122,8 +148,11 @@ struct IBase : boost::openmethod::inplace_vptr_base<IBase<Registry>, Registry> {
     }
 
     virtual auto vf(int) const -> int = 0;
+    virtual auto vfu(int) const -> int = 0;
     virtual auto dd(const IBase&, int) const -> int = 0;
     virtual auto dd_with(const IBase&, int) const -> int = 0;
+    virtual auto ddu(const IBase&, int) const -> int = 0;
+    virtual auto dd_withu(const IBase&, int) const -> int = 0;
 
     int tag;
 };
@@ -140,12 +169,24 @@ struct IDerived
         return x + static_cast<int>(N);
     }
 
+    auto vfu(int x) const -> int override {
+        return x + this->tag;
+    }
+
     auto dd(const IBase<Registry>& other, int x) const -> int override {
         return other.dd_with(*this, x);
     }
 
     auto dd_with(const IBase<Registry>&, int x) const -> int override {
         return x + static_cast<int>(N);
+    }
+
+    auto ddu(const IBase<Registry>& other, int x) const -> int override {
+        return other.dd_withu(*this, x);
+    }
+
+    auto dd_withu(const IBase<Registry>& other, int x) const -> int override {
+        return x + this->tag + other.tag;
     }
 };
 

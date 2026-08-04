@@ -73,9 +73,22 @@ recommended API), in the `OMB_RUN` macro, in `report.py`, and in the README tabl
   site).
 - `disp = mean - nvf` additionally removes *reaching the receiver* — `nvf` is a non-virtual member
   call that loads the object but dispatches on nothing. Rows whose timed region never touches the
-  receiver (`om vptr`: the v-table pointer is already in the arguments) set
+  receiver (`om vptr` with const bodies: the v-table pointer is already in the arguments) set
   `touches_receiver = false` and get `disp = net` instead — subtracting `nvf` from them fabricates
-  a credit for a miss they never paid. Cold, that is ~45% of what a virtual call
+  a credit for a miss they never paid.
+
+### Two body worlds
+
+Every variant carries `body`: `const` bodies return compile-time constants (the delivery world —
+the receiver is touched only where the mechanism requires it; this is the no-op-default pattern,
+where call overhead is the entire cost, so it is a real workload, not a control; fair cross-form
+statistic is `net`);
+`use` bodies read a member of every receiver (`src/use_methods.hpp`, `vfu`/`ddu` yardsticks — the
+world where `disp` is fair for every row, virtual_ptr included, because everyone owes the receiver
+line exactly once). The worlds exist because a virtual function *must* load the receiver (the vptr
+lives there) and a `virtual_ptr` call need not — no single statistic is fair to both. Baselines are
+body-neutral (`body = "-"`). Yardstick matching in `report()` and `report.py` keys on body; use
+rows ratio against the use yardstick. See README, "Two fair comparisons". Cold, that is ~45% of what a virtual call
   appears to cost, and it is common to every variant, so `net` alone compresses every ratio toward
   1.
 
@@ -143,7 +156,9 @@ the fastest way to land mid-dispatch with the whole chain on the stack.
 ## Invariants that must not be broken
 
 - **`--verify` is the correctness gate, and its oracles are independent of the paths under
-  test**: `x + tag` for arity 1, the tag rule for arity 2, `x + b.tag` for the dd yardstick.
+  test**: `x + tag` for arity 1, the tag rule for arity 2, `x + b.tag` for the dd yardstick, and
+  for the use world `x + a.tag + b.tag` on the diagonal against `x - a.tag - b.tag` in the
+  catch-all — distinct values, so verify can tell which overrider ran.
   It used to compare the open methods against each other, which passed when every registry was
   wrong the same way (e.g. an unregistered overrider pack). A registry wired to the
   wrong method, or an overrider that silently failed to register, otherwise produces a plausible but
