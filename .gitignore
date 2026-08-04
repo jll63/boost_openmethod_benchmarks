@@ -1,0 +1,18 @@
+# Built binaries and CMake trees.
+/bin/
+/build/
+/build-*/
+
+# `include` is a symlink into a local Boost checkout, so it is machine-specific.
+# Recreate it with:
+#   ln -s /path/to/boost/libs/openmethod/include include
+/include
+
+# Scratch result sets; results/ itself is committed, since the README tables are
+# generated from it and report.py must be able to reproduce them.
+/results-*/
+
+# Editor and tool state.
+/.vscode/
+/.cache/
+/.claude/
