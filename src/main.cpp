@@ -1260,7 +1260,8 @@ void report(
         // Subtracting the touch baseline would credit those rows with a
         // receiver miss they never paid -- cold, that fabricated ~270 cycles
         // and made "dispatch alone" read ~0.96x when the honest figure is the
-        // row's whole net (review finding). For them, disp IS net.
+        // row's whole net (review finding). For them, there is no
+        // object-reaching cost to remove.
         if (!r.touches_receiver) {
             // Subtract the DIRECT call, not the empty probe: disp is the
             // mechanism-excess column, and the mechanism a vp row replaces is

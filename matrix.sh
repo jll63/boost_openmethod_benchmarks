@@ -21,6 +21,20 @@ REPS=${REPS:-6000}
 RUNS=${RUNS:-5}
 OUTDIR=${OUTDIR:-results}
 
+# The commands behind the two columns. `clang++` and `g++` on PATH are whatever
+# the distribution ships, which for the compiler axis is a distro-policy choice
+# rather than a code-generation one -- Ubuntu 24.04 still defaults to gcc 13,
+# three years and two releases old. Point these at the newest installed
+# toolchain instead, and keep the *labels* (and so the file names, the CSV
+# columns and the README headings) fixed at `clang++` and `g++`.
+CLANG=${CLANG:-$(ls /usr/bin/clang++-[0-9]* 2>/dev/null | sort -V | tail -1)}
+CLANG=${CLANG:-clang++}
+GXX=${GXX:-$(ls /usr/bin/g++-[0-9]* 2>/dev/null | sort -V | tail -1)}
+GXX=${GXX:-g++}
+
+echo "clang++: $($CLANG --version | head -1)"
+echo "g++:     $($GXX --version | head -1)"
+
 # Old pass directories would silently blend into report.py's medians -- and
 # because results/ is committed, stale runs are the norm here, not an
 # accident: RUNS=5 over the committed run1..run7 used to leave run6 and run7
@@ -29,10 +43,17 @@ mkdir -p "$OUTDIR"
 rm -rf "$OUTDIR"/run*
 
 # Build once; the passes only re-measure.
-for cc in g++ clang++; do
+for cc in clang++ g++; do
     for bits in 64 32; do
         echo "building $cc / $bits-bit"
-        CXX="$cc" BITS="$bits" ./build.sh > /dev/null
+
+        case $cc in
+            clang++) real=$CLANG ;;
+            g++) real=$GXX ;;
+        esac
+
+        CXX="$real" BITS="$bits" OUT="bin/benchmark-$cc-$bits" \
+            ./build.sh > /dev/null
 
         # The gate: 32-bit OpenMethod is not covered by upstream CI, so a
         # silently wrong column is a real possibility. Fail loudly instead.
@@ -50,7 +71,7 @@ while [ "$k" -le "$RUNS" ]; do
     mkdir -p "$dir"
     echo "=== pass $k of $RUNS ==="
 
-    for cc in g++ clang++; do
+    for cc in clang++ g++; do
         for bits in 64 32; do
             bin="bin/benchmark-$cc-$bits"
 

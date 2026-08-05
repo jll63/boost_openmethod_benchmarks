@@ -16,3 +16,6 @@
 /.vscode/
 /.cache/
 /.claude/
+
+# asmtab.py imports report.py for the table formatting.
+__pycache__/

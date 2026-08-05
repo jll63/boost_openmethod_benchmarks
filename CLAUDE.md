@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-An RDTSC micro-benchmark that times **one** Boost.OpenMethod dispatch with the caches scrubbed,
+An RDTSC micro-benchmark that times **one** Boost.OpenMethod dispatch, caches warm or scrubbed,
 against a virtual function call as the yardstick. Read `README.md` first — it is the deliverable, not
 just documentation, and it records the methodology and the reasons behind most of the design.
 
@@ -18,8 +18,9 @@ bin/benchmark-g++-64 --verify    # correctness gate, see below
 ./run.sh                         # pins a core, one build, full matrix of variants
 
 ./matrix.sh                      # all 4 compiler x bitness combos, RUNS=5 passes -> results/run<k>/
-python3 report.py                # renders ALL README tables from results/run*/
+python3 report.py                # renders ALL measured README tables from results/run*/
 python3 report.py matrix         # or just one section: results|indirect|matrix
+python3 asmtab.py                # renders "Every timed region" by disassembling bin/
 
 cmake -S . -B build -DOMB_BITS=32 && cmake --build build && (cd build && ctest)
 ```
@@ -78,8 +79,8 @@ recommended API), in the `OMB_RUN` macro, in `report.py`, and in the README tabl
 - `disp = mean - touch` additionally removes *reaching the receiver* — `touch` is a non-virtual member
   call that loads the object but dispatches on nothing. Rows whose timed region never touches the
   receiver (`om vptr` with const bodies: the v-table pointer is already in the arguments) set
-  `touches_receiver = false` and get `disp = net` instead — subtracting `touch` from them fabricates
-  a credit for a miss they never paid.
+  `touches_receiver = false` and subtract `direct` instead (see the bullet above) — subtracting
+  `touch` from them fabricates a credit for a miss they never paid.
 
 ### Two body worlds
 
@@ -238,3 +239,20 @@ Prose quotes ~17 figures inline, deliberately limited to **warm gcc/64** values,
 ~1-2%, plus disassembly facts and the control. Volatile figures (cold cycle counts, per-build ratio
 lists) are stated qualitatively on purpose. Re-verify the inline figures against `results/` after a
 re-run; do not reintroduce volatile ones.
+
+`./probes.sh` builds `src/dispatch_probe.cpp` -- every dispatch compiled standalone -- into
+`bin/probe-*`. It is never measured and never published: it is the oracle `asmtab.py` checks its
+backward slice against, so a compiler that rearranges the timed window fails the run instead of
+silently shortening a listing. Rebuild it whenever the binaries are rebuilt; the check is skipped
+with a note if it is missing. Its bodies mirror `V::call` in `main.cpp` and must be kept in step.
+
+`asmtab.py` owns the whole "Every timed region" section — prose, table and listings — the same way
+`report.py` owns the measured ones. It reads the four **binaries**, not `results/`, so regenerate it
+after any change to `src/` or the build flags, having rebuilt all four. Its figures are computed,
+and the claims that hold "on every build" are guarded: `uniform()` aborts rather than print a claim
+that has stopped being true, naming the row that broke it. It also fails loudly on a global read it
+cannot classify, instead of labelling it something plausible.
+
+Both generators emit **prettier-aligned** markdown tables (`align_tables` in `report.py`, which
+`asmtab.py` imports), because the editor reformats the README on save; matching that shape keeps
+regeneration from churning several hundred whitespace-only lines.

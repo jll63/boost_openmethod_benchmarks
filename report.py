@@ -25,19 +25,31 @@ way to use the library.
 
 import csv
 import glob
+import io
 import os
+import re
 import statistics
 import sys
+from contextlib import redirect_stdout
 
+# Paired by bitness, matching asmtab.py, so the two compilers' figures for the
+# same target sit side by side. Prose that quotes a per-build list quotes it in
+# this order.
 COLUMNS = [
-    ("gcc/64", "g++-64.csv"),
-    ("gcc/32", "g++-32.csv"),
     ("clang/64", "clang++-64.csv"),
+    ("gcc/64", "g++-64.csv"),
     ("clang/32", "clang++-32.csv"),
+    ("gcc/32", "g++-32.csv"),
 ]
 
-# The build the single-column "## Results" tables are taken from.
-BUILD = "g++-64.csv"
+# The build the single-column "## Results" tables are taken from: the newest
+# compiler of the four, so the headline numbers are not a distro default's.
+BUILD = "clang++-64.csv"
+
+# Named in every caption of a single-build table: those sections are one column
+# of the matrix, and a reader landing on one of them has no other way to tell
+# which (review finding).
+BUILD_NAME = next(n for n, f in COLUMNS if f == BUILD)
 
 REGISTRIES = ("vptr_vector", "indirect", "vptr_map", "flat_map")
 INPLACE = ("inplace", "inplace_ind")
@@ -70,6 +82,47 @@ def cycles(v):
     return f"{v:.1f}" if v < 100 else f"{v:.0f}"
 
 
+def align_tables(text):
+    """Pad every markdown table prettier-style: cells left-aligned to the
+    column's widest content, separators as dashes of exactly that width.
+
+    The README is realigned this way by the editor's markdown formatter on
+    save; emitting the same bytes keeps regenerate-and-splice a no-op.
+    """
+    lines = text.split("\n")
+    out = []
+    i = 0
+
+    while i < len(lines):
+        if not lines[i].startswith("|"):
+            out.append(lines[i])
+            i += 1
+            continue
+
+        j = i
+        while j < len(lines) and lines[j].startswith("|"):
+            j += 1
+
+        rows = [[c.strip() for c in l.strip().strip("|").split("|")]
+                for l in lines[i:j]]
+        seps = [all(re.fullmatch(r"-+", c) for c in r) for r in rows]
+        ncols = max(len(r) for r in rows)
+
+        for r in rows:
+            r += [""] * (ncols - len(r))
+
+        widths = [max([3] + [len(r[c]) for r, s in zip(rows, seps) if not s])
+                  for c in range(ncols)]
+
+        for r, s in zip(rows, seps):
+            cells = ["-" * w if s else v.ljust(w) for v, w in zip(r, widths)]
+            out.append("| " + " | ".join(cells) + " |")
+
+        i = j
+
+    return "\n".join(out)
+
+
 def dispatch_rows(arity):
     """The yardstick, then every dispatch, virtual_ptr form before reference.
 
@@ -90,8 +143,8 @@ def dispatch_rows(arity):
 def emit_world(data, body, passes, warm_caption, cold_caption):
     """The results-shaped table pair for one body world."""
     print(warm_caption + "\n")
-    print(f"Median of {passes} passes.\n")
-    print("| dispatch | arity | net | x vf | disp |")
+    print(f"{BUILD_NAME}, median of {passes} passes.\n")
+    print("| dispatch | arity | net | x net | disp |")
     print("|---|---|---|---|---|")
 
     for arity in (1, 2):
@@ -103,7 +156,7 @@ def emit_world(data, body, passes, warm_caption, cold_caption):
                   f"{cycles(med(data, k, 'disp'))} |")
 
     print("\n" + cold_caption + "\n")
-    print(f"Median of {passes} passes.\n")
+    print(f"{BUILD_NAME}, median of {passes} passes.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")
     print("|---|---|---|---|---|---|")
 
@@ -127,8 +180,11 @@ def label_for(label, group, arity, suffix=""):
 
 
 def section_results(data, passes):
-    direct_m = med(data, ("warm", "main", "-", "baseline", "direct", 0), "mean")
-    touch_m = med(data, ("warm", "main", "-", "baseline", "touch", 1), "mean")
+    # "net", not "mean": the medians of the raw means land on different passes
+    # for the two baselines, and the difference then fails to recompute from
+    # the net figures the captions display (review finding).
+    direct_m = med(data, ("warm", "main", "-", "baseline", "direct", 0), "net")
+    touch_m = med(data, ("warm", "main", "-", "baseline", "touch", 1), "net")
 
     print("### Warm caches — the finest resolution\n")
     print(f"Warm mode resolves the mechanisms' few-cycle differences: reaching "
@@ -137,13 +193,13 @@ def section_results(data, passes):
           f"mostly indirect-branch misprediction, which depends on the\n"
           f"binary's layout — across the four builds its net ranges severalfold "
           f"— so warm\n*ratios* are build-local. For figures that transfer, "
-          f"read the cold table below.\nThe `inplace` rows are ratioed against "
-          f"the inplace hierarchy's own `vf`.\n")
-    print(f"Median of {passes} passes.\n")
+          f"read the cold table below.\nThe `inplace` rows divide by their own "
+          f"hierarchy's yardstick.\n")
+    print(f"{BUILD_NAME}, median of {passes} passes.\n")
     direct = med(data, ("warm", "main", "-", "baseline", "direct", 0), "net")
     print(f"For scale: a direct call to a stamping body measures "
           f"{direct:.1f} cycles net here.\n")
-    print("| dispatch | arity | net | x vf | disp |")
+    print("| dispatch | arity | net | x net | disp |")
     print("|---|---|---|---|---|")
 
     for arity in (1, 2):
@@ -156,6 +212,10 @@ def section_results(data, passes):
 
     touch_m = med(data, ("clflush", "main", "-", "baseline", "touch", 1), "net")
     vfn = med(data, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
+    iy1 = [med(data, ("clflush", h, "const", "yardstick", "vf", 1), "net")
+           for h in INPLACE]
+    iy2 = [med(data, ("clflush", h, "const", "yardstick", "vf+vf", 2), "net")
+           for h in INPLACE]
 
     print("\n### Caches cold (`clflush`) — the steadiest ratios\n")
     print(f"Flushed, the first touch of the receiver is a cache miss in its own "
@@ -166,8 +226,11 @@ def section_results(data, passes):
           f"cost divided by the yardstick's —\nis the headline, and the most "
           f"reproducible figure this benchmark produces:\nmisses dominate, "
           f"and misses do not care about code layout. `disp` and\n`x disp` "
-          f"are the mechanism-excess diagnostics.\n")
-    print(f"Median of {passes} passes.\n")
+          f"are the mechanism-excess diagnostics. The `inplace` rows again\n"
+          f"divide by their own hierarchy's yardstick — {iy1[0]:.0f} and "
+          f"{iy1[1]:.0f} cycles here at\narity 1, {iy2[0]:.0f} and {iy2[1]:.0f} "
+          f"at arity 2 — not the yardstick rows shown.\n")
+    print(f"{BUILD_NAME}, median of {passes} passes.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")
     print("|---|---|---|---|---|---|")
 
@@ -204,7 +267,10 @@ def section_indirect(loaded, passes):
                     d = loaded[name]
                     dv = med(d, (mode, dkey[0], "const", dkey[1], call, ar), "disp")
                     iv = med(d, (mode, ikey[0], "const", ikey[1], call, ar), "disp")
-                    delta = f"{iv - dv:+.1f}" if dv < 100 else f"{iv - dv:+.0f}"
+                    # Subtract the endpoints as printed, so the delta always
+                    # recomputes from the cell itself (review finding).
+                    rdv, riv = float(cycles(dv)), float(cycles(iv))
+                    delta = f"{riv - rdv:+.1f}" if dv < 100 else f"{riv - rdv:+.0f}"
                     cells.append(
                         f"{cycles(dv)} → {cycles(iv)} (**{delta}**)")
 
@@ -305,14 +371,32 @@ def main():
 
     single = loaded[next(n for n, f in COLUMNS if f == BUILD)]
 
+    buf = io.StringIO()
+
+    with redirect_stdout(buf):
+        emit_sections(section, single, loaded, passes)
+
+    sys.stdout.write(align_tables(buf.getvalue()))
+
+
+def emit_sections(section, single, loaded, passes):
     if section in ("results", "all"):
         section_results(single, passes)
         print()
 
     if section in ("used", "all"):
+        vfc = med(single, ("warm", "main", "const", "yardstick", "vf", 1), "net")
+        vfu = med(single, ("warm", "main", "use", "yardstick", "vf", 1), "net")
         emit_world(
             single, "use", passes,
-            "#### Warm, receiver used",
+            "#### Warm, receiver used\n\n"
+            "The member reads execute inside the timed window — every use body "
+            "loads its\nreceiver(s) before the arrival stamp (see \"Timing\"). "
+            "Warm that is visible: the\narity-1 rows sit several cycles above "
+            f"their delivery-world counterparts (`vf`\ngoes {vfc:.1f} → "
+            f"{vfu:.1f}); at arity 2 the reads overlap the dispatch and the "
+            "nets\nbarely move. Ratios divide by this table's own yardsticks, "
+            "which pay the same\nreads.",
             "#### Cold (`clflush`), receiver used")
         print()
 
