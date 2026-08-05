@@ -128,11 +128,11 @@ def label_for(label, group, arity, suffix=""):
 
 def section_results(data, passes):
     direct_m = med(data, ("warm", "main", "-", "baseline", "direct", 0), "mean")
-    nvf = med(data, ("warm", "main", "-", "baseline", "nvf", 1), "mean")
+    touch_m = med(data, ("warm", "main", "-", "baseline", "touch", 1), "mean")
 
     print("### Warm caches — the sharpest numbers\n")
     print(f"Nothing is evicted, so reaching the receiver is almost free: the "
-          f"`nvf` baseline\nmeasures only {nvf - direct_m:.1f} cycles more than "
+          f"`touch` baseline\nmeasures only {touch_m - direct_m:.1f} cycles more than "
           f"a plain call. "
           f"`net` and `disp` therefore agree, and both are\nstable to ~1 cycle "
           f"run to run. The `inplace` rows are ratioed against the inplace\n"
@@ -153,14 +153,14 @@ def section_results(data, passes):
                   f"{med(data, k, 'x_net'):.2f}x | "
                   f"{cycles(med(data, k, 'disp'))} |")
 
-    nvf = med(data, ("clflush", "main", "-", "baseline", "nvf", 1), "net")
+    touch_m = med(data, ("clflush", "main", "-", "baseline", "touch", 1), "net")
     vfn = med(data, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
 
     print("\n### Caches cold (`clflush`)\n")
     print(f"Flushed, the first touch of the receiver is a cache miss in its own "
-          f"right: the\n`nvf` baseline nets {nvf:.0f} cycles, "
+          f"right: the\n`touch` baseline nets {touch_m:.0f} cycles, "
           f"against {vfn:.0f} for the whole `vf`\nyardstick. So "
-          f"{nvf / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
+          f"{touch_m / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
           f"object rather than\ndispatching on it. `x net` compares whole call "
           f"with whole call — the headline;\n`disp` and `x disp` are the "
           f"mechanism-excess diagnostics.\n")

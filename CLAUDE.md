@@ -74,10 +74,10 @@ recommended API), in the `OMB_RUN` macro, in `report.py`, and in the README tabl
   real call to a stamping body) is a quoted reference point, subtracted only in `disp` for rows
   that never touch the receiver. Do not make excess-over-direct the headline: that answers "what
   does the mechanism add", not "open method vs virtual function".
-- `disp = mean - nvf` additionally removes *reaching the receiver* — `nvf` is a non-virtual member
+- `disp = mean - touch` additionally removes *reaching the receiver* — `touch` is a non-virtual member
   call that loads the object but dispatches on nothing. Rows whose timed region never touches the
   receiver (`om vptr` with const bodies: the v-table pointer is already in the arguments) set
-  `touches_receiver = false` and get `disp = net` instead — subtracting `nvf` from them fabricates
+  `touches_receiver = false` and get `disp = net` instead — subtracting `touch` from them fabricates
   a credit for a miss they never paid.
 
 ### Two body worlds
@@ -106,7 +106,7 @@ rows ratio against the use yardstick. See README, "Two fair comparisons". Cold, 
 registry**, and direct and indirect inplace need one instantiation each.
 
 Because inplace objects are a different size (24 vs 16 bytes), each hierarchy carries **its own
-`nvf` baseline and `vf` yardstick**. Baseline and yardstick lookups in `report()` are keyed by
+`touch` baseline and `vf` yardstick**. Baseline and yardstick lookups in `report()` are keyed by
 `(mode, arity, hier)` — if you add a hierarchy, it needs its own baselines or `disp` is meaningless.
 
 ### Registries and methods

@@ -14,7 +14,7 @@
 //
 // These methods measure the *use* world: the body touches the object, as real
 // code almost always does. Every call form then owes the receiver's cache
-// line exactly once, so `disp = mean - nvf` is fair for every row, and the
+// line exactly once, so `disp = mean - touch` is fair for every row, and the
 // interesting physics becomes measurable: a virtual function's mandatory
 // receiver load doubles as a prefetch for its body, while a virtual_ptr call
 // pays its receiver miss inside the body -- serialized after the table misses

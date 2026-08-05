@@ -31,11 +31,11 @@ struct Base {
 
     virtual ~Base() = default;
 
-    // Object-touch baseline: a non-virtual call that loads the receiver and
+    // The receiver-touch baseline: a plain call that loads the receiver and
     // stamps. It reads `tag` on the same cache line as the v-table pointer, so
     // it pays the same one object miss a dispatch does. noinline so it is a
-    // real call, symmetric with the dispatched rows and the direct baseline.
-    __attribute__((noinline)) auto nvf() const -> stamp_id {
+    // real call, symmetric with the dispatched rows and the direct reference.
+    __attribute__((noinline)) auto touch() const -> stamp_id {
         auto t = tag;
         return {stop_stamp(), t};
     }
@@ -47,7 +47,7 @@ struct Base {
 
     // Use-flavored yardstick: same call, but the body READS the receiver.
     // Pairs with the use-flavored methods, where every body reads a member of
-    // every receiver, so `disp = mean - nvf` is fair for all call forms --
+    // every receiver, so `disp = mean - touch` is fair for all call forms --
     // including virtual_ptr, which pays its receiver miss in the body instead
     // of in the dispatch. See README, "Two fair comparisons".
     virtual auto vfu() const -> stamp_id = 0;
@@ -133,7 +133,7 @@ inline auto factories() -> const std::array<factory, num_classes>& {
 // It carries the same members as Base/Derived so the yardsticks measure the
 // same work, but the objects are larger -- 24 bytes against 16 -- because the
 // v-table pointer now lives in the object. That is why the inplace variants get
-// their own `nvf` baseline and `vf` yardstick rather than borrowing the main
+// their own `touch` baseline and `vf` yardstick rather than borrowing the main
 // hierarchy's: `disp` and `x vf` must be computed against objects of the same
 // shape.
 // ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ struct IBase : boost::openmethod::inplace_vptr_base<IBase<Registry>, Registry> {
 
     virtual ~IBase() = default;
 
-    __attribute__((noinline)) auto nvf() const -> stamp_id {
+    __attribute__((noinline)) auto touch() const -> stamp_id {
         auto t = tag;
         return {stop_stamp(), t};
     }

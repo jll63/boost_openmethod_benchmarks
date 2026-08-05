@@ -235,10 +235,10 @@ struct v_direct {
 // but they dispatch on nothing. `disp` is measured against these, so the cold
 // miss on the receiver is charged to reaching the object rather than to
 // dispatching on it.
-struct v_nvf1 {
+struct v_touch1 {
     static constexpr bool touches_receiver = true;
     static constexpr const char* body = "-";
-    static constexpr const char* name = "nvf";
+    static constexpr const char* name = "touch";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
     static constexpr int arity = 1;
@@ -250,7 +250,7 @@ struct v_nvf1 {
     }
 
     static auto call(args a) -> stamp_id {
-        return a->nvf();
+        return a->touch();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -286,10 +286,10 @@ struct pair_args {
     const Base* b;
 };
 
-struct v_nvf2 {
+struct v_touch2 {
     static constexpr bool touches_receiver = true;
     static constexpr const char* body = "-";
-    static constexpr const char* name = "nvf+nvf";
+    static constexpr const char* name = "touch+touch";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
     static constexpr int arity = 2;
@@ -304,7 +304,7 @@ struct v_nvf2 {
     // of `a`, then the stamping non-virtual call on `b`.
     static auto call(args p) -> stamp_id {
         auto ta = p.a->tag;
-        auto r = p.b->nvf();
+        auto r = p.b->touch();
         r.id += ta;
         return r;
     }
@@ -518,10 +518,10 @@ struct ipair_args {
 };
 
 template<class R, const char* Hier>
-struct v_ip_nvf1 {
+struct v_ip_touch1 {
     static constexpr bool touches_receiver = true;
     static constexpr const char* body = "-";
-    static constexpr const char* name = "nvf";
+    static constexpr const char* name = "touch";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = Hier;
     static constexpr int arity = 1;
@@ -533,7 +533,7 @@ struct v_ip_nvf1 {
     }
 
     static auto call(args a) -> stamp_id {
-        return a->nvf();
+        return a->touch();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -542,10 +542,10 @@ struct v_ip_nvf1 {
 };
 
 template<class R, const char* Hier>
-struct v_ip_nvf2 {
+struct v_ip_touch2 {
     static constexpr bool touches_receiver = true;
     static constexpr const char* body = "-";
-    static constexpr const char* name = "nvf+nvf";
+    static constexpr const char* name = "touch+touch";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = Hier;
     static constexpr int arity = 2;
@@ -559,7 +559,7 @@ struct v_ip_nvf2 {
 
     static auto call(args p) -> stamp_id {
         auto ta = p.a->tag;
-        auto r = p.b->nvf();
+        auto r = p.b->touch();
         r.id += ta;
         return r;
     }
@@ -676,7 +676,7 @@ struct v_ip_ref2 {
 
 // ---------------------------------------------------------------------------
 // Use-world variants: same shapes, use-flavored bodies. All touch the
-// receiver -- that is the definition of this world -- so disp subtracts nvf
+// receiver -- that is the definition of this world -- so disp subtracts touch
 // for every one of them, including the virtual_ptr forms.
 // ---------------------------------------------------------------------------
 
@@ -1049,7 +1049,7 @@ auto verify(env& e) -> bool {
                 {"vfu yardstick", a->vfu().id, want1},
                 {"dd yardstick", a->dd(*b).id, b->tag},
                 {"ddu yardstick", a->ddu(*b).id, a->tag + b->tag},
-                {"nvf baseline", a->nvf().id, want1},
+                {"touch baseline", a->touch().id, want1},
                 {"vec ref1", poke_ref<vector_registry>::fn(*a).id, want1},
                 {"map ref1", poke_ref<map_registry>::fn(*a).id, want1},
                 {"flat ref1", poke_ref<flat_registry>::fn(*a).id, want1},
@@ -1134,7 +1134,7 @@ auto verify(env& e) -> bool {
                     {"vfu", a->vfu().id, a->tag},
                     {"dd", a->dd(*b).id, b->tag},
                     {"ddu", a->ddu(*b).id, a->tag + b->tag},
-                    {"nvf", a->nvf().id, a->tag},
+                    {"touch", a->touch().id, a->tag},
                     {"ref1", ref1(*a), a->tag},
                     {"ref2", ref2(*a, *b), want2},
                     {"refu1", refu1(*a), a->tag},
@@ -1200,7 +1200,7 @@ void report(
     const std::vector<row>& rows, const config& cfg, double tsc_hz,
     const env& e, const stats& floor_st) {
     // The apparatus baseline: the empty window. Matched by name -- `direct`
-    // and `nvf` are baselines too, with different roles.
+    // and `touch` are baselines too, with different roles.
     auto named_baseline = [&](cache_mode m, const char* name) -> const stats* {
         for (const auto& r : rows) {
             if (r.group == "baseline" && r.mode == m && r.name == name) {
@@ -1227,7 +1227,7 @@ void report(
         return r.st.mean - b->mean;
     };
 
-    // The object-touch baseline of the same arity: `nvf` / `nvf+nvf`, which
+    // The receiver-touch baseline of the same arity: `touch` / `touch+touch`, which
     // load the receivers but dispatch on nothing.
     auto obj_baseline = [&](cache_mode m, int arity,
                             const std::string& hier) -> const stats* {
@@ -1247,7 +1247,7 @@ void report(
         // The om vptr timed regions never dereference the receiver: the
         // dispatch reads the virtual_ptr (already in the arguments), the
         // method slot and the table, and the overriders ignore the object.
-        // Subtracting the nvf baseline would credit those rows with a
+        // Subtracting the touch baseline would credit those rows with a
         // receiver miss they never paid -- cold, that fabricated ~270 cycles
         // and made "dispatch alone" read ~0.96x when the honest figure is the
         // row's whole net (review finding). For them, disp IS net.
@@ -1560,8 +1560,8 @@ auto main_impl(int argc, char** argv) -> int {
     for (auto mode : modes) {
         rows.push_back(run<v_probe>(e, cfg, mode));
         rows.push_back(run<v_direct>(e, cfg, mode));
-        rows.push_back(run<v_nvf1>(e, cfg, mode));
-        rows.push_back(run<v_nvf2>(e, cfg, mode));
+        rows.push_back(run<v_touch1>(e, cfg, mode));
+        rows.push_back(run<v_touch2>(e, cfg, mode));
         rows.push_back(run<v_vf1>(e, cfg, mode));
         rows.push_back(run<v_vf2>(e, cfg, mode));
 
@@ -1581,8 +1581,8 @@ auto main_impl(int argc, char** argv) -> int {
 
         // inplace: own baselines and yardsticks, reference form only.
 #define OMB_RUN_INPLACE(R, G, H)                                               \
-    rows.push_back(run<v_ip_nvf1<R, H>>(e, cfg, mode));                        \
-    rows.push_back(run<v_ip_nvf2<R, H>>(e, cfg, mode));                        \
+    rows.push_back(run<v_ip_touch1<R, H>>(e, cfg, mode));                        \
+    rows.push_back(run<v_ip_touch2<R, H>>(e, cfg, mode));                        \
     rows.push_back(run<v_ip_vf1<R, H>>(e, cfg, mode));                         \
     rows.push_back(run<v_ip_vf2<R, H>>(e, cfg, mode));                         \
     rows.push_back(run<v_ip_ref1<R, G, H>>(e, cfg, mode));                     \

@@ -64,7 +64,7 @@ Five axes, plus yardsticks and baselines:
 | bitness | 64-bit vs 32-bit (`-m32`) |
 | body | `const` — overrider and virtual bodies return a compile-time constant, the receiver is touched only if the mechanism itself requires it; `use` — every body reads a member of every receiver (see "Two fair comparisons") |
 | yardstick | `vf` — one virtual call; `vf+vf` — the double dispatch idiom, two chained virtual calls; each in both body flavors |
-| baseline | three measurements that calibrate the others: `probe` runs the timing machinery with nothing inside it — its cost is the measurement apparatus, and subtracting it from a row gives `net`, the call's true cost; `direct` is a plain (non-virtual, non-inlined) function call, quoted with the tables for scale; `nvf` is a plain call that also loads the receiver — subtracting it isolates dispatch from the cost of reaching the object (`disp`). How each is built is in "Timing" |
+| baseline | three measurements that calibrate the others: `probe` runs the timing machinery with nothing inside it — its cost is the measurement apparatus, and subtracting it from a row gives `net`, the call's true cost; `direct` is a plain (non-virtual, non-inlined) function call, quoted with the tables for scale; `touch` is a plain call that also loads the receiver — subtracting it isolates dispatch from the cost of reaching the object (`disp`). How each is built is in "Timing" |
 
 In the `dispatch` row, the first four values are registries and the last two are
 not — `inplace_vptr` is a CRTP mixin, not a policy — so that axis is named for
@@ -76,7 +76,7 @@ is spelled.
 pointer that would otherwise be looked up, and with `inplace_vptr` the object
 already holds one, so the reference form does no lookup either.
 
-They also need their own class hierarchy, and hence their own `nvf` baseline and
+They also need their own class hierarchy, and hence their own `touch` baseline and
 `vf` yardstick: `inplace_vptr_base` declares
 `friend auto boost_openmethod_registry(Class*) -> Registry`, so a class binds to
 exactly one registry, and the objects are 24 bytes rather than 16. Every ratio
@@ -95,14 +95,14 @@ Two compensations are applied, giving two columns:
   nothing else. `net` is therefore the full cost of the call, and **`x net` is
   the headline ratio: whole call against whole call**, which is the comparison
   this benchmark exists to make.
-- **`disp` = mean − `nvf` of the same arity** additionally removes the cost of
+- **`disp` = mean − `touch` of the same arity** additionally removes the cost of
   *reaching* the receiver. In the cold modes that is 40-45% of what a virtual
   call appears to cost, and it is common to every variant that dereferences the
   receiver, so `net` alone compresses those ratios toward 1. `disp` is dispatch
   alone.
 - **Exception: the `om vptr` rows never touch the receiver.** Their timed
   region reads the `virtual_ptr` (already in the arguments), the method slot
-  and the table; the overriders ignore the object. Subtracting `nvf` from them
+  and the table; the overriders ignore the object. Subtracting `touch` from them
   would credit a receiver miss they never paid — cold, that fabricated ~270
   cycles and understated their dispatch cost by ~2x (a finding of the
   adversarial review). For those rows `disp` subtracts the `direct` baseline —
@@ -157,7 +157,7 @@ the ratio to the virtual-function yardstick of the same arity.
 
 ### Warm caches — the sharpest numbers
 
-Nothing is evicted, so reaching the receiver is almost free: the `nvf` baseline
+Nothing is evicted, so reaching the receiver is almost free: the `touch` baseline
 measures only 0.2 cycles more than a plain call. `net` and `disp` therefore agree, and both are
 stable to ~1 cycle run to run. The `inplace` rows are ratioed against the inplace
 hierarchy's own `vf`, which measures within a cycle of the main one.
@@ -194,7 +194,7 @@ For scale: a direct call to a stamping body measures 3.7 cycles net here.
 ### Caches cold (`clflush`)
 
 Flushed, the first touch of the receiver is a cache miss in its own right: the
-`nvf` baseline nets 264 cycles, against 567 for the whole `vf`
+`touch` baseline nets 264 cycles, against 567 for the whole `vf`
 yardstick. So 47% of a virtual call's `net` is reaching the object rather than
 dispatching on it. `x net` compares whole call with whole call — the headline;
 `disp` and `x disp` are the mechanism-excess diagnostics.
@@ -270,7 +270,7 @@ ever touching the object, because the v-table pointer travels in the fat
 pointer. That asymmetry is the design, not an artifact, and it means no single
 statistic is fair to both sides:
 
-- Subtract the receiver-touch (`disp = mean − nvf`) from everything, and the
+- Subtract the receiver-touch (`disp = mean − touch`) from everything, and the
   virtual function gets part of *its own dispatch mechanism* excused — the load
   it is charged for IS the vptr fetch.
 - Subtract it from nothing, and the comparison charges `virtual_ptr` full price
@@ -289,7 +289,7 @@ the fair cross-form statistic is `net` against `net`.
 **The use world** (`body = use`, tables below): every overrider and virtual
 body reads a member of every receiver, as bodies that operate on the object
 do. Now every call form owes the receiver's cache line exactly once, and
-`disp = mean − nvf` is fair for every row including `virtual_ptr`.
+`disp = mean − touch` is fair for every row including `virtual_ptr`.
 
 ### What the ratios divide
 
@@ -870,7 +870,7 @@ reference form, `om ref` at arity 2) is a small residue left by subtracting two
 large DRAM-bound numbers, and its run-to-run spread is comparable to its value
 — historical probes of the then-worst case measured a 2x range before the
 receiver draws were paired and ~±13% after. The `om vptr` rows are exempt since
-the review fix: their `disp` subtracts only the direct call, never `nvf`. The `x net`
+the review fix: their `disp` subtracts only the direct call, never `touch`. The `x net`
 ratios stay stable throughout because the shared miss sits in both terms.
 
 So: **read `x disp` warm and under `clflush`; under `sweep` read `x net`** and
@@ -911,7 +911,7 @@ as the CMake test.
   dispatch — physically impossible, and listed here as an unexplained artifact
   for several revisions. Under the arrival window the inversion is gone
   (11.8 < 13.4 warm): it lived in the return path, not in the dispatch.
-- **`nvf` is a lower bound on "reaching the receiver", not an exact one.** It
+- **`touch` is a lower bound on "reaching the receiver", not an exact one.** It
   reads `tag` at offset 8; a dispatch reads the v-table pointer at offset 0.
   Same cache line, so the same one miss — but a `virtual_` reference dispatch
   then chases that pointer to the `type_info`, which is a *second* miss that
