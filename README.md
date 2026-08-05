@@ -219,11 +219,7 @@ Median of 7 passes.
 
 ### Reading it
 
-`x vf` and `x net` are a row's total call cost divided by the yardstick's —
-the caller's question, per "What the ratios divide". For scale, a direct call
-measures 3.7 cycles net warm. Ratios from earlier revisions of this README
-were computed under different window and baseline schemes and are not
-comparable; [HISTORY.md](HISTORY.md) has the lineage.
+Ratios below are `x net` unless marked `disp`.
 
 - **A `virtual_ptr` call costs exactly what a virtual function call costs**:
   1.00x warm (10.2 vs 10.4 cycles net), 1.03x cold. Not "no more than" — the
@@ -531,8 +527,7 @@ indirect-branch misprediction (100 random targets), and predictor behavior
 depends on binary layout — which is why warm ratios are build-local while
 cold ratios agree. A side experiment with a single leaf class (perfectly
 predicted) put the predicted virtual call at a few cycles and the mispredicted
-one severalfold higher; it was measured under a previous window scheme and is
-archived in [HISTORY.md](HISTORY.md).
+one severalfold higher; the data is archived in [HISTORY.md](HISTORY.md).
 
 ## Reproducibility
 
@@ -628,10 +623,9 @@ arity 1 (every world), `tag`-if-same-leaf-else-−1 for const arity 2,
 `a.tag + b.tag` / `−a.tag − b.tag − 1` for use arity 2 (distinct values, so
 the gate can tell which overrider ran), `b.tag` for the dd yardstick. Every
 dispatch path in every registry and both worlds is checked, plus the
-yardsticks and the `touch` baseline. Comparing paths against each other
-instead — which passes when every registry is wrong the same way — is a hole
-this gate closed after an adversarial review demonstrated it
-([HISTORY.md](HISTORY.md)).
+yardsticks and the `touch` baseline. The oracles are deliberately independent
+of the paths under test: comparing paths against each other would pass
+whenever every registry is wrong the same way.
 
 ## Caveats
 
