@@ -1,17 +1,23 @@
-# Boost.OpenMethod dispatch benchmark
+# Boost.OpenMethod dispatch benchmarks
 
-Times **one** open-method dispatch with `rdtsc`, with the caches scrubbed
-beforehand, against an ordinary virtual function call as the yardstick.
+Times **one** open-method dispatch with `rdtsc`, caches deliberately scrubbed,
+against a virtual function call as the yardstick. The headline, on this
+machine: a `virtual_ptr` call costs exactly what a virtual function call costs
+(1.00x warm, 1.03x cold), `virtual_` reference dispatch costs about 2x a
+virtual call cold — a figure stable within 4% across two compilers and two
+bitnesses — and an open multi-method beats the double-dispatch idiom in every
+configuration measured.
 
-Boost.OpenMethod ships no benchmark. `doc/modules/ROOT/pages/performance.adoc`
-states that dispatching through a reference is "between 30% and 50% slower than
-calling the equivalent virtual function", attributed to "micro- and RDTSC-based
-benchmarks", but no code in the repository produces that number. This does.
+Boost.OpenMethod's documentation cites "micro- and RDTSC-based benchmarks" for
+its performance claims; this repository is such a benchmark, built to be
+auditable: every table is generated from the committed data by `report.py`,
+and every dispatch path is checked against contract-derived oracles before a
+single measurement runs.
 
 ## Where the v-table pointer lives
 
-The two call forms differ in one structural fact, and most of the numbers below
-follow from it.
+The two call forms differ in one structural fact, and most of the numbers
+below follow from it.
 
 A virtual function call finds the v-table *through the object*: the dispatch
 chain starts with a load from the receiver, whether or not the body needs it.
@@ -48,112 +54,74 @@ Plenty of OO designs give a base class a **no-op default** that subclasses
 override — event handlers, visitor hooks — and a no-op body touches nothing.
 Those calls should be as fast as possible *because* they do nothing: call
 overhead is their entire cost, and skipping the receiver load is a genuine
-saving, not an accounting trick. The benchmark therefore measures both worlds
-separately; see "Two fair comparisons".
+saving. The benchmark therefore measures two body worlds; see "Two fair
+comparisons".
 
 ## What is measured
 
-Five axes, plus yardsticks and baselines:
+Six axes:
 
 | axis | values |
 |---|---|
-| dispatch | how the v-table pointer is found: `vptr_vector` (the default: `std_rtti` + `fast_perfect_hash` + `vptr_vector`), `indirect` (the default plus `indirect_vptr`), `vptr_map` over `std::unordered_map`, `vptr_map` over `boost::unordered_flat_map`, `inplace` (`inplace_vptr`, the pointer stored in the object), `inplace_ind` (`inplace_vptr` plus `indirect_vptr`) |
+| dispatch | how the v-table pointer is reached: `vptr_vector` (the default registry: `std_rtti` + `fast_perfect_hash` + `vptr_vector`), `indirect` (the default plus `indirect_vptr`), `vptr_map` over `std::unordered_map`, `vptr_map` over `boost::unordered_flat_map`, `inplace` (`inplace_vptr`: the pointer stored in the object), `inplace_ind` (`inplace_vptr` plus `indirect_vptr`) |
 | call form | `virtual_<const Base&>` (the v-table pointer is looked up at the call site) vs `virtual_ptr<const Base, R>` (already carries it) |
 | arity | 1 and 2 virtual arguments |
+| body | `const` — bodies return a compile-time constant, the receiver is touched only where the mechanism requires it; `use` — every body reads a member of every receiver |
 | compiler | g++ 13.3 vs clang++ 18.1 |
 | bitness | 64-bit vs 32-bit (`-m32`) |
-| body | `const` — overrider and virtual bodies return a compile-time constant, the receiver is touched only if the mechanism itself requires it; `use` — every body reads a member of every receiver (see "Two fair comparisons") |
-| yardstick | `vf` — one virtual call; `vf+vf` — the double dispatch idiom, two chained virtual calls; each in both body flavors |
-| baseline | three measurements that calibrate the others: `probe` runs the timing machinery with nothing inside it — its cost is the measurement apparatus, and subtracting it from a row gives `net`, the call's true cost; `direct` is a plain (non-virtual, non-inlined) function call, quoted with the tables for scale; `touch` is a plain call that also loads the receiver — subtracting it isolates dispatch from the cost of reaching the object (`disp`). How each is built is in "Timing" |
 
-In the `dispatch` row, the first four values are registries and the last two are
-not — `inplace_vptr` is a CRTP mixin, not a policy — so that axis is named for
-what it selects, the way the v-table pointer is reached, rather than for how it
-is spelled.
+All six dispatch values are registries in the code; the last two have no
+`vptr` policy at all — the pointer lives in the object via the `inplace_vptr`
+mixin, so those two are measured through a reference only (a `virtual_ptr`
+would carry a pointer the object already holds). They also need their own
+class hierarchy — an inplace class binds to exactly one registry — with their
+own yardsticks and baselines, whose `vf` measures within a cycle of the main
+hierarchy's.
 
-`inplace` and `inplace_ind` are measured **through a reference only**. A
-`virtual_ptr` would be meaningless there: its purpose is to carry a v-table
-pointer that would otherwise be looked up, and with `inplace_vptr` the object
-already holds one, so the reference form does no lookup either.
+Two yardsticks, in both body flavors: `vf`, one virtual call, and `vf+vf`, the
+double-dispatch idiom — two chained virtual calls. (The idiom is modeled, not
+spelled out: one `dd_with` per leaf in the base is unwritable at 100 leaves
+and would cost the same two dependent dispatches.)
 
-They also need their own class hierarchy, and hence their own `touch` baseline and
-`vf` yardstick: `inplace_vptr_base` declares
-`friend auto boost_openmethod_registry(Class*) -> Registry`, so a class binds to
-exactly one registry, and the objects are 24 bytes rather than 16. Every ratio
-below is against the yardstick of its own hierarchy; the three hierarchies' `vf`
-measurements agree to within a cycle, which is what makes one table legitimate.
+Four baselines calibrate everything:
 
-That comes to 59 variants, each run in 3 cache states: the 33 const-body ones —
-21 on the main hierarchy (4 registries x 2 call forms x 2 arities, plus 2
-yardsticks and 3 baselines) and 6 on each inplace hierarchy — plus 26 use-body
-ones (16 main-hierarchy dispatches and 2 yardsticks, 4 inplace dispatches and
-their own 2 x 2 yardsticks). The baselines are body-neutral and shared.
+- **`probe`** — the timing machinery with nothing inside it. Its cost is the
+  measurement apparatus; subtracting it from a row gives **`net`, the call's
+  true cost**.
+- **`direct`** — a plain (non-virtual, non-inlined) function call, quoted with
+  the tables for scale. It is never subtracted from the headline.
+- **`touch` / `touch+touch`** — a plain call that also loads the receiver(s).
+  Subtracting it isolates dispatch from the cost of reaching the object
+  (**`disp`**).
 
-Two compensations are applied, giving two columns:
+That comes to 60 variants — 34 const-body (22 on the main hierarchy: 4
+registries x 2 call forms x 2 arities plus 2 yardsticks and 4 baselines, plus
+6 on each inplace hierarchy) and 26 use-body — each measured in the two
+published cache states, warm and cold (`clflush`). A third state, a 64 MiB
+cache sweep, exists in the binary as a diagnostic but is not part of the
+published dataset.
 
-- **`net` = mean − `probe`** subtracts the cost of the measurement itself,
-  nothing else. `net` is therefore the full cost of the call, and **`x net` is
-  the headline ratio: whole call against whole call**, which is the comparison
-  this benchmark exists to make.
-- **`disp` = mean − `touch` of the same arity** additionally removes the cost of
-  *reaching* the receiver. In the cold modes that is 40-45% of what a virtual
-  call appears to cost, and it is common to every variant that dereferences the
-  receiver, so `net` alone compresses those ratios toward 1. `disp` is dispatch
-  alone.
-- **Exception: the `om vptr` rows never touch the receiver.** Their timed
-  region reads the `virtual_ptr` (already in the arguments), the method slot
-  and the table; the overriders ignore the object. Subtracting `touch` from them
-  would credit a receiver miss they never paid — cold, that fabricated ~270
-  cycles and understated their dispatch cost by ~2x (a finding of the
-  adversarial review). For those rows `disp` subtracts the `direct` baseline —
-  the mechanism they replace is a plain call — and cold
-  they read *higher* than the receiver-touching forms' `disp` precisely because
-  nothing is subtracted: everything in their timed region is dispatch work.
+### What the ratios divide
 
-## Build and run
+- **`x net` = `net` / yardstick's `net`** divides whole-call costs. This is
+  "how much slower is an open-method call than a virtual function call" — the
+  benchmark's question, and **the headline in every table**.
+- **`x disp`** divides *excesses*: each mechanism's cost above a plain call
+  (or above reaching the receiver, where it is owed). Subtracting a shared
+  constant pushes ratios away from 1, so these read larger — deliberately:
+  they isolate the machinery. Diagnostics, not the verdict.
 
-Boost 1.91 must be installed system-wide, and `./include` must be a symlink into
-a Boost checkout — it is machine-specific, so it is not in the repository:
-
-```sh
-ln -s /path/to/boost/libs/openmethod/include include
-```
-
-OpenMethod is then taken live from that working tree and everything else from
-`/usr/local/include`. The library is header-only, so `-Iinclude` is the whole of
-it — nothing to link.
-
-```sh
-./build.sh                       # -> bin/benchmark-g++-64
-bin/benchmark-g++-64 --verify    # correctness gate, see below
-./run.sh                         # pins a core, runs the full matrix
-```
-
-`CXX=clang++ BITS=32 ./build.sh` selects compiler and bitness; binaries land in
-`bin/benchmark-<compiler>-<bits>`. `REPS=8000 CPU=5 ./run.sh` to change the run.
-Options: `--reps --objects --sweep-mb --cpu --seed --mode
-warm|clflush|sweep|all --csv --verify`.
-
-For the compiler x bitness matrix:
-
-```sh
-./matrix.sh          # builds and verifies all four, RUNS=5 passes -> results/
-python3 report.py    # renders every generated table in this README
-```
-
-32-bit builds need `sudo apt install g++-multilib` (clang uses gcc's multilib
-headers, so that one install covers both compilers).
-
-The class count is compile-time (`Derived<N>` is a template):
-`CLASSES=1000 ./build.sh`, or `-DOMB_CLASSES=1000` with CMake.
+`om vptr` rows with const bodies never touch the receiver, so their `disp`
+subtracts the `direct` baseline — the mechanism they replace is a plain call —
+where every receiver-touching row subtracts `touch`.
 
 ## Results
 
-AMD Ryzen 9 9955HX (Zen 5), 32 MiB L3, WSL2, g++ 13.3.0 `-O2 -march=native`
-64-bit, 100 classes, 4096 objects, 6000 reps, median of 7 passes (the `gcc/64`
-column of the matrix below). `net` is reference cycles above the `direct`
-baseline; `x vf` is
-the ratio to the virtual-function yardstick of the same arity.
+AMD Ryzen 9 9955HX (Zen 5), 32 MiB L3, WSL2, 100 classes, 4096 objects
+shuffled in memory, 6000 reps per pass, median of 7 interleaved passes. This
+section is the gcc/64 column; the full compiler x bitness matrix follows.
+Cycles are TSC reference cycles (~2.45 GHz here — the core clock is not
+observable under the hypervisor).
 
 ### Warm caches — the finest resolution
 
@@ -230,101 +198,49 @@ Median of 7 passes.
 | `om ref / inplace` | 2 | 805 | 502 | 1.33x | 1.67x |
 | `om ref / inplace_ind` | 2 | 1128 | 822 | 1.83x | 2.59x |
 
-`net` and `disp` answer different questions, and the gap between the two columns
-is the point: subtract only the apparatus and you learn how much slower a cold
-open-method *call* is; subtract the object touch as well and you learn how much
-slower open-method *dispatch* is. Neither is wrong. The second is the one that
-isolates the library.
-
 ### Reading it
 
-`x vf` in the warm tables and `x net` in the cold ones divide **whole call by
-whole call** — the question this benchmark exists to answer. The `disp` column
-and `x disp` are the mechanism-excess diagnostics; "What the ratios divide"
-below explains the distinction, and [HISTORY.md](HISTORY.md) explains why
-ratios from earlier revisions of this README are not comparable with these.
-For scale, a direct call measures 3.7 cycles net warm.
+`x vf` / `x net` divide whole call by whole call. For scale, a direct call
+measures 3.7 cycles net warm. Ratios from earlier revisions of this README
+were computed under different window and baseline schemes and are not
+comparable; [HISTORY.md](HISTORY.md) has the lineage.
 
 - **A `virtual_ptr` call costs exactly what a virtual function call costs**:
-  1.00x warm (10.2 vs 10.4 cycles), 1.03x cold. Not "no more than" — the same,
-  across every direct registry (the control trio reads 1.00x / 1.01x / 1.00x).
+  1.00x warm (10.2 vs 10.4 cycles net), 1.03x cold. Not "no more than" — the
+  same, and the three direct registries agree (1.00x / 1.01x / 1.00x warm).
 - **`virtual_` reference dispatch costs about 2x a virtual call cold — the
   figure that holds across every build** (1.98x / 2.05x / 1.98x / 2.01x), and
-  above the 30-50% band `performance.adoc` cites (whose numbers date from a
-  different harness on different hardware). Warm the ratio reads 1.56x on
+  above the 30-50% band the library's documentation cites, whose numbers date
+  from a different harness on different hardware. Warm the ratio is 1.56x on
   gcc/64 but ranges 1.42x-2.10x across builds with the yardstick's
   misprediction cost — a build-local figure. The excess is the
-  hash-and-look-up, which the `disp` column isolates at ~6 extra cycles warm.
-- **`vptr_map` costs 2.46x warm through a reference** — its probe adds ~9
-  cycles over `fast_perfect_hash`'s multiply-shift — and
-  `boost::unordered_flat_map` measures the same (2.48x). Cold the gap narrows
-  (1.44x) because everyone's misses dominate.
-- **`inplace_vptr` is indistinguishable from a virtual function**: 1.00x warm,
-  1.13x cold — its layout *is* the virtual function's layout.
-- **At two virtual arguments the multi-method beats double dispatch
-  everywhere**: 0.52x through `virtual_ptr` warm, and still 1.14x net cold
-  against an idiom paying two dependent chains (2.15x for the reference form).
-- **`indirect_vptr` costs 1.08x through `virtual_ptr`, 1.85x through a
-  reference, warm** — the second dereference, priced in the section below.
+  hash-and-look-up, ~6 extra cycles warm in the `disp` column.
+- **The `vptr_map` probe is expensive warm**: 2.46x through a reference, and
+  `boost::unordered_flat_map` measures the same (2.48x) — the extra pointer
+  chase matters, the probe strategy does not at this table size. Cold the gap
+  narrows (1.44x) because everyone's misses dominate.
+- **`inplace_vptr` is indistinguishable from a virtual function** (1.00x warm,
+  1.13x cold): its layout *is* the virtual function's layout.
+- **At two virtual arguments the multi-method beats double dispatch in every
+  form**: 0.52x through `virtual_ptr` warm, 1.14x net cold against an idiom
+  paying two dependent chains (the reference form: 2.15x).
+- **`indirect_vptr` prices its extra dereference at about one cycle warm
+  through a `virtual_ptr`** (1.00x → 1.08x) and three through a reference
+  (1.56x → 1.85x); the section below itemizes it.
 
 ## Two fair comparisons
 
-A virtual function call *must* load the receiver: the v-table pointer lives in
-the object. So must `virtual_` reference dispatch — its hash chain starts from
-the object's v-table pointer. A `virtual_ptr` call alone can dispatch without
-ever touching the object, because the v-table pointer travels in the fat
-pointer. That asymmetry is the design, not an artifact, and it means no single
-statistic is fair to both sides:
+The delivery world above (const bodies) is `virtual_ptr`'s best case: dispatch
+without the object, the no-op-default workload. The use world makes every body
+read a member of every receiver, so every call form owes the receiver's cache
+line exactly once and `disp` subtracts `touch` legitimately for all rows —
+including `virtual_ptr`, which pays its receiver miss in the body instead of
+in the dispatch.
 
-- Subtract the receiver-touch (`disp = mean − touch`) from everything, and the
-  virtual function gets part of *its own dispatch mechanism* excused — the load
-  it is charged for IS the vptr fetch.
-- Subtract it from nothing, and the comparison charges `virtual_ptr` full price
-  for its table misses while ignoring that in real code its receiver miss is
-  not avoided but *deferred* — the body pays it instead.
-
-So the benchmark measures two worlds, with two yardsticks:
-
-**The delivery world** (`body = const`, every table above): bodies return
-compile-time constants; the receiver is touched only where the mechanism
-requires it. This is not a lab construct — it is the no-op-default pattern from
-"Where the v-table pointer lives", where call overhead is the entire cost of
-the call. It is `virtual_ptr`'s best case — dispatch without the object — and
-the fair cross-form statistic is `net` against `net`.
-
-**The use world** (`body = use`, tables below): every overrider and virtual
-body reads a member of every receiver, as bodies that operate on the object
-do. Now every call form owes the receiver's cache line exactly once, and
-`disp = mean − touch` is fair for every row including `virtual_ptr`.
-
-### What the ratios divide
-
-Two ratio families appear in the tables, and they answer different questions:
-
-- **`x net`** divides whole-call costs: `(om − probe) / (vf − probe)`. This is
-  "how much slower is an open-method call than a virtual function call" — the
-  benchmark's stated question, and the one `performance.adoc`'s "30% to 50%"
-  claim belongs to.
-- **`x disp`** divides *excesses*: each mechanism's cost above a plain call
-  (and above reaching the receiver, where it is owed). Subtracting a shared
-  constant from both sides pushes ratios away from 1, so these read larger —
-  deliberately: they isolate the machinery. It is a diagnostic, not the
-  verdict ([HISTORY.md](HISTORY.md) records the revision that briefly thought
-  otherwise).
-
-`direct` itself is never subtracted from the headline: comparing an open
-method with a virtual function does not require deciding what a plain call
-"should" cost. It is printed with the tables as a reference point.
-
-One caution about what the use world means. The benchmark measures the *call
-mechanism*, not bodies; the member reads exist to make the receiver line's
-movement visible, not to bill the mechanism for the body's work. The virtual
-function's mandatory receiver load doubles as a prefetch for its body — a real
-effect, but a property of what surrounds the call. The measurable question the
-use world answers is where the `virtual_ptr` body's deferred receiver miss
-lands: serialized behind the table misses, or overlapped under them if
-speculation across the indirect call reaches the body's load. That is
-microarchitecture, not arithmetic; the tables answer it.
+One caution: the benchmark measures the *call mechanism*, not bodies. The
+member reads exist to make the receiver line's movement visible. The
+measurable question is where the `virtual_ptr` body's deferred receiver miss
+lands — serialized behind the table misses, or overlapped under them.
 
 #### Warm, receiver used
 
@@ -386,51 +302,46 @@ Median of 7 passes.
 
 ### What the use world shows
 
-- **With the receiver used, parity holds in both columns and both worlds'
-  accounting**: `virtual_ptr` is 0.98x warm and 1.02x net / 1.05x disp cold of
-  the virtual function.
-- **The deferred receiver miss still costs nothing**: cold net 587 with the
-  body never touching the object, 522 with it read — against 264 for a lone
-  receiver miss. The fat pointer holds the object address from the first
+- **Parity holds in both columns**: `virtual_ptr` is 0.98x warm and 1.02x net
+  / 1.05x disp cold of the virtual function — the receiver miss now paid by
+  both sides and subtracted from both sides.
+- **The deferred receiver miss costs nothing.** Cold net 587 with the body
+  never touching the object, 522 with it read — against 264 for a lone
+  receiver miss. The object address is in the fat pointer from the first
   cycle; the body's load completes under the table misses.
-- **The reference form benefits too**: 1.37x warm here against 1.56x in the
-  delivery world — its receiver line, already fetched by the hash chain, makes
-  the body's read free while the yardstick pays its own load's latency.
-- Delivery world: `virtual_ptr` matches the virtual function without loading
-  the object. Use world: it matches while hiding the load. Nothing here
+- **The virtual function's prefetch buys it nothing in return**: its own body
+  read is free (the line its dispatch fetched), but so, through overlap, is
+  `virtual_ptr`'s. Delivery world: `virtual_ptr` matches without loading the
+  object. Use world: it matches while hiding the load. No workload here
   rewards keeping the v-table pointer in the object.
 
 ## Cost of `indirect_vptr`
 
-`indirect_vptr` (`preamble.hpp:751`) is a marker policy. With it in the registry,
+`indirect_vptr` is a marker policy (`boost/openmethod/preamble.hpp`). With it,
 `vptr_vector` stores `const vptr_type*` instead of `vptr_type`, and a
-`virtual_ptr` holds a pointer *to* the v-table pointer rather than the v-table
-pointer itself (`core.hpp:751-754`). What you buy is the ability to call
-`initialize()` again — after loading a shared library, say — and have every
-`virtual_ptr` already in flight pick up the new v-tables, instead of dangling.
-What you pay is one more load on every dispatch.
+`virtual_ptr` holds a pointer *to* the v-table pointer. What you buy: calling
+`initialize()` again — after loading a shared library, say — revalidates every
+`virtual_ptr` already in flight instead of dangling it. What you pay: one more
+dependent load on every dispatch.
 
-The `indirect` rows above are `boost::openmethod::indirect_registry`, i.e. the
-default policies plus `indirect_vptr`, so the comparison against `vptr_vector`
-isolates that one policy.
+The `indirect` rows above are the library's `indirect_registry` — the default
+policies plus `indirect_vptr` — so the comparison against `vptr_vector`
+isolates the one policy.
 
 ### What it costs in instructions: exactly one
 
-Timed region, gcc 13 `-O2`, `virtual_ptr`, arity 1. Direct on the left, indirect
-on the right; the only difference is the marked line.
+Timed regions from the committed scheme's binaries (gcc 13, `-O2`), direct on
+the left, indirect on the right; the only difference is the marked load:
 
 ```asm
 mov  rcx, QWORD PTR [rsp]            mov  rcx, QWORD PTR [rsp]
-mov  rax, QWORD PTR [rsp]            mov  rax, QWORD PTR [rsp]
-mov  edx, edi                        mov  edx, edi
-                                     mov  rax, QWORD PTR [rax]   ; <-- the load
-mov  rdi, rcx                        mov  rdi, rcx
-mov  rcx, QWORD PTR [rip+...]        mov  rcx, QWORD PTR [rip+...]
-call QWORD PTR [rax+rcx*8]           call QWORD PTR [rax+rcx*8]
+mov  rax, QWORD PTR [rip+slot]       mov  rdx, QWORD PTR [rip+slot]
+mov  rdi, QWORD PTR [rsp]            mov  rdi, QWORD PTR [rsp]
+                                     mov  rax, QWORD PTR [rcx]   ; <-- deref
+call QWORD PTR [rcx+rax*8]           call QWORD PTR [rax+rdx*8]
 ```
 
-The `virtual_` reference path gains the same single `mov rax, QWORD PTR [rax]`,
-inserted between the v-table lookup and the call.
+(The start stamp's register bookkeeping, identical in both, is elided.)
 
 ### What it costs in cycles
 
@@ -458,70 +369,39 @@ Median of 7 passes; `disp` cycles, direct → indirect.
 | `inplace` ref | 1 | 330 → 554 (**+224**) | 310 → 557 (**+247**) | 312 → 538 (**+227**) | 368 → 568 (**+200**) |
 | `inplace` ref | 2 | 502 → 822 (**+320**) | 571 → 842 (**+272**) | 497 → 839 (**+342**) | 570 → 813 (**+243**) |
 
-### Reading it
+### Reading the cost
 
-- **Warm, it costs about one cycle through a `virtual_ptr` and about three
-  through a reference.** Whole call against whole call, that takes
-  `virtual_ptr` from 1.00x a virtual call to 1.08x on gcc/64, and the
-  reference form from 1.56x to 1.85x.
-- **It costs more on the reference path than the `virtual_ptr` path**, roughly
-  double, in every build. On the reference path the extra load sits at the end
-  of an already-long dependency chain (object → `type_info` → hash → vptr vector
-  → **indirection** → v-table) with nothing left to overlap against. Through a
-  `virtual_ptr` the chain is two loads long, so there is more slack.
-- **Cold, the reference path pays a full cache miss**, consistently signed
-  across all four builds. The indirection target is a
-  separate line from everything else the dispatch touches, so it is a miss of
-  its own.
-- **Cold through a `virtual_ptr` it is nearly free at arity 1** — under the
-  arrival window the four builds measure +46, +35, +0 and +18 cycles against
-  nets of ~550: small, and dwarfed by the reference path's full miss. That is partly noise (the cold spread swamps it), but there is a
-  real mechanism too: the indirection load and the method's slot load are
-  independent of each other, so the two misses overlap. On the reference path
-  they cannot, because the slot is needed only after the indirection resolves.
-  Do not read a benefit into the negative numbers; read "below what this
-  apparatus can resolve".
+- **Warm, about one cycle through a `virtual_ptr` and about three through a
+  reference**: 1.00x → 1.08x and 1.56x → 1.85x on gcc/64. On the reference
+  path the load lands at the end of an already-long dependency chain (object →
+  `type_info` → hash → vptr vector → **indirection** → v-table) with nothing
+  to overlap against; through a `virtual_ptr` the chain is short and there is
+  slack.
+- **Cold, the reference path pays a full miss for it** — the indirection
+  target is a line of its own. Through a `virtual_ptr` at arity 1 the four
+  builds measure +74, +26, −6 and +22 cycles against nets of ~550: small, and
+  inconsistently sized, because the independent slot load gives the miss
+  something to hide under.
+- **On an `inplace_vptr` hierarchy the same policy costs about two cycles
+  warm** (10.3 → 12.2 net at arity 1, 10.8 → 12.5 at arity 2) — the second
+  dependent load's latency, giving back the tie with the virtual function that
+  `inplace_vptr` had won.
 
-### With `inplace_vptr`
-
-The same policy applies to an `inplace_vptr` hierarchy, where it changes the
-*stored* member from a `vptr_type` to a `const vptr_type*`. The cost is the same
-shape and slightly larger: warm on gcc/64, `inplace` goes 6.2 → 8.1 cycles at
-arity 1 and 6.8 → 8.3 at arity 2 — about two cycles, the second dependent
-load's latency, giving back the tie with the virtual function that
-`inplace_vptr` had won.
-
-### When it is worth it
-
-Arity 2 through a `virtual_ptr` costs +0.7 to +2.5 cycles warm, on a dispatch
-that is already 0.46x the cost of the double-dispatch idiom — so an
-`indirect_registry` multi-method still beats hand-written double dispatch by a
-wide margin. The policy is cheap where dispatch is cheap, and dearest exactly
-where dispatch is already dearest (cold, through a reference). If the program
-needs `initialize()` to be callable more than once, the price is a load; if it
-does not, `indirect_vptr` is pure cost.
+If the program needs `initialize()` to be callable more than once, the price
+is a load; if it does not, `indirect_vptr` is pure cost.
 
 ## Compiler and bitness
 
-Four builds — g++ 13.3 and clang++ 18.1, each at `-m64` and `-m32` — measured by
-`./matrix.sh` and rendered by `report.py`. Cells are `<ratio>x (<cycles>)`: the
-ratio to the virtual-function yardstick **of the same arity, from the same
-build**, and the `disp` cycles it came from. Within-build ratios are what make
-the columns comparable at all: gcc and clang generate different code for the
-yardstick itself, so raw cycles across columns would not be.
+Four builds — g++ 13.3 and clang++ 18.1, each at `-m64` and `-m32` — measured
+by `./matrix.sh`. Cells are `x net (net cycles)`: whole call against the same
+build's own yardstick, which is what makes columns comparable — the compilers
+generate different code for the yardstick itself.
 
-What the bitness axis actually changes, from each binary's own header line:
-
-```
-build: g++ 13.3, 64-bit; sizeof void* 8, word 8, virtual_ptr 16
-build: g++ 13.3, 32-bit; sizeof void* 4, word 4, virtual_ptr 8
-```
-
-`detail::word` is the dispatch-table cell, so at `-m32` every v-table, every
-dispatch table and every `vptr_vector` entry is half the size, and `virtual_ptr`
-goes from two words to one. **All four builds pass `--verify`** — worth noting,
-since upstream CI covers 32-bit on MSVC only (`ADDRMD: '32,64'` in
-`.drone.jsonnet`), not on gcc or clang.
+The bitness axis is real at the data-structure level: at `-m32`,
+`sizeof(void*)` and the dispatch-table word halve to 4 bytes and
+`virtual_ptr` halves to 8 bytes (still two words). All four builds pass
+`--verify`. (Upstream CI exercises 32-bit builds for both MSVC and gcc, per
+`.drone.jsonnet`; this benchmark adds measured 32-bit numbers.)
 
 #### Caches cold (`clflush`)
 
@@ -587,151 +467,78 @@ Median of 7 passes. Spread across passes: median 8%, p90 19%.
 
 ### What it shows
 
-- **Bitness buys nothing cold and little warm.** The cold reference-dispatch
-  *cycles* are all but identical across bitness (856 → 857 on gcc, 829 → 837
-  on clang); halving every table does not save misses that are counted per
-  line. Warm ratios move mainly because the small yardstick denominators move.
+- **Bitness buys nothing cold**: reference-dispatch nets are 1126 → 1155 on
+  gcc and 1147 → 1156 on clang — halving every table does not save misses
+  that are counted per line, not per byte.
 - **The compilers agree on the mechanisms.** Cold, whole call against whole
   call, reference dispatch is 1.98x-2.05x the virtual function on all four
-  builds; `virtual_ptr` ties or nearly ties it warm on every 64-bit build. The 32-bit columns are noisier —
-  their yardsticks are only a handful of cycles, so a one-cycle wobble is a
-  large ratio swing. Read the cycle columns before the ratios there.
-- **The one persistent artifact is clang/32's `virtual_ptr` rows** (11.2 warm
-  against 5.8-7.2 elsewhere): the i386 ABI marshals the 8-byte fat pointer
-  through the stack inside the timed window — the harness's by-value argument
-  meeting that ABI, not the library.
-- **`inplace` remains the fastest reference dispatch in every column** (1.13x
-  cold disp on three builds), and the `om ref` cold ordering vector < flat ≈
-  map holds everywhere.
+  builds. Warm ratios scatter (the small yardstick denominators are
+  layout-sensitive); read the cycle columns before the ratios there.
+- **clang/32's `virtual_ptr` rows carry a harness artifact**: the i386 ABI
+  marshals the 8-byte fat pointer through the stack inside the timed window
+  (~10.7 warm disp against 5.8-6.9 on the other builds) — the by-value
+  argument meeting that ABI, not the library.
+- **`inplace` is the fastest reference dispatch in every column**, at ~1.1x
+  net cold across all four builds.
 
-### gcc against clang, instruction by instruction
+## gcc against clang, instruction by instruction
 
-The two compilers' columns differ, and it is worth being precise about what the
-difference is, because the obvious reading — that one generates better dispatch
-than the other — is wrong.
-
-**`virtual_ptr`: clang's code is strictly better, and the time is the same.**
-The timed region, arity 1, `vptr_vector`:
+The obvious reading of compiler differences — that one generates better
+dispatch — is wrong. The current timed regions, arity 1, `vptr_vector`,
+`virtual_ptr` (start-stamp bookkeeping included, since it is what the window
+contains):
 
 ```asm
-; gcc -- spills the virtual_ptr and reloads it twice
-mov  rcx, QWORD PTR [rsp]                mov  rax, QWORD PTR [rip+slot]
-mov  edx, edi                            mov  edx, ecx
-mov  rax, QWORD PTR [rsp]                call QWORD PTR [rdi+rax*8]
-mov  rdi, rcx
-mov  rcx, QWORD PTR [rip+slot]
-call QWORD PTR [rax+rcx*8]
+; gcc — spills the fat pointer          ; clang — keeps it in registers
+mov  rcx, QWORD PTR [rsp]               mov  r14d, edx
+mov  r12d, eax                          neg  r14d
+mov  rax, QWORD PTR [rip+slot]          shl  r14, 0x20
+mov  ebx, edx                           mov  eax, eax
+mov  rdi, QWORD PTR [rsp]               sub  r14, rax
+shl  rbx, 0x20                          mov  rax, QWORD PTR [rip+slot]
+call QWORD PTR [rcx+rax*8]              call QWORD PTR [rdi+rax*8]
 ```
 
-Seven instructions against three. clang keeps the `virtual_ptr` in registers and
-emits exactly the sequence `performance.adoc:91-93` documents; gcc round-trips it
-through the stack. They measure within a cycle of each other, because both are L1
-hits and the critical path is the dependent load plus the indirect call, not the
-instruction count.
+Different register strategies, same critical path: one slot load and one
+indirect call. They measure the same. The reference form is
+instruction-for-instruction equivalent between the compilers. What differs
+across builds is the *yardstick*: a virtual call's warm cost is dominated by
+indirect-branch misprediction (100 random targets), and predictor behavior
+depends on binary layout — which is why warm ratios are build-local while
+cold ratios agree. A side experiment with a single leaf class (perfectly
+predicted) put the predicted virtual call at a few cycles and the mispredicted
+one severalfold higher; it was measured under a previous window scheme and is
+archived in [HISTORY.md](HISTORY.md).
 
-**`virtual_` reference: the two are equivalent.** Nine instructions each, same
-dependency chain — object v-table pointer, `type_info`, multiply, shift, index
-the vptr vector, load the method slot, call:
+## Reproducibility
 
-```asm
-; gcc                                    ; clang
-mov  rax, QWORD PTR [rdi]                mov  rax, QWORD PTR [rdi]
-mov  rdx, QWORD PTR [rip+shift]          mov  rcx, QWORD PTR [rip+mult]
-mov  rax, QWORD PTR [rax-0x8]            imul rcx, QWORD PTR [rax-0x8]
-imul rax, QWORD PTR [rip+mult]           movzx eax, BYTE PTR [rip+shift]
-shrx rax, rax, rdx                       shrx rax, rcx, rax
-mov  rdx, QWORD PTR [rip+vptrs]          mov  rcx, QWORD PTR [rip+vptrs]
-mov  rax, QWORD PTR [rdx+rax*8]          mov  rax, QWORD PTR [rcx+rax*8]
-mov  rdx, QWORD PTR [rip+slot]           mov  rcx, QWORD PTR [rip+slot]
-call QWORD PTR [rax+rdx*8]               call QWORD PTR [rax+rcx*8]
-```
-
-If anything clang is tighter: it folds the `type_info` load into the multiply's
-memory operand, and loads `shift` as a **byte** — legitimate, since `shrx` reads
-only the low six bits of its count. Neither difference lengthens the chain.
-
-**So where does the ratio gap come from? The yardstick.** `x vf` divides by a
-virtual call measured in the same build, and that divisor is dominated not by the
-call but by *indirect-branch misprediction* — 100 leaf types drawn at random give
-the predictor nothing to work with. Rebuilding with a single leaf, so the call
-always goes to the same target, separates the two:
-
-(Measured under the previous, return-path-inclusive window — the effect, not
-the absolutes, is the point.)
-
-| `disp` cycles, warm | gcc | clang |
-|---|---|---|
-| `vf`, 1 class (predictable) | 2.4 | 6.3 |
-| `vf`, 100 classes (mispredicted) | 14.6 | 11.6 |
-| `om ref`, 1 class | 9.0 | 9.3 |
-| `om ref`, 100 classes | 18.7 | 18.2 |
-
-Two things fall out. The virtual call is mostly misprediction — 2.4 cycles when
-predicted, 14.6 when not. And **`om ref` is the same on both compilers at either
-class count**; it is the yardstick that differs, and it differs in *opposite
-directions* depending on how many targets there are. That signature is
-branch-target-buffer behaviour differing between two binaries with different
-layouts, not one compiler dispatching better than the other.
-
-The practical consequence: compare cycle columns across compilers, and treat a
-cross-compiler difference in `x vf` as a statement about the denominator until
-shown otherwise.
-
-### Reproducibility, and why seven passes
-
-A single cold pass moves by a median of 11% between repeats (p90 40%, max 73%)
-— more than the differences between the columns. Every cell above is therefore
-the **median of 7 passes**, and `matrix.sh` loops the whole matrix rather than
-repeating each build in place, so thermal and background drift lands on all four
-columns alike instead of favouring whichever ran first.
-
-Even so, read the cold table for the large effects only. The built-in control
-says how far to trust it: the three *direct* registries' `om vptr` rows must
-agree, since the vptr policy is off that call path (`indirect` is excluded — it
-adds a load there by design). Cold their nets agree to within 6-14% per
-column. Warm is far better behaved — a few percent, and
-the arity-2 control is nearly exact (7.3 / 7.3 / 7.2 cycles on gcc/64).
-
-### Shielding would not help
-
-Isolating the benchmark from other processes — a cgroup cpuset, `isolcpus`, the
-`cgexec -g memory,cpu:shield` that [Boost.Unordered's
-benchmarks](https://github.com/boostorg/boost_unordered_benchmarks) run under —
-buys nothing measurable here. That was worth checking rather than assuming.
-Three cold runs of `om ref / vptr_vector`, `disp` cycles, under load conditions
-imposed on purpose (a separate one-off probe, not part of `results/`):
-
-| condition | three runs |
-|---|---|
-| idle | 907 / 848 / 868 |
-| eight spinners on other cores | 879 / 873 / 882 |
-| a spinner on the measurement core itself | 818 / 904 / 866 |
-| four 256 MiB memory streamers on other cores | 916 / 842 / 914 |
-
-A co-tenant on the measurement core — exactly what a cpuset shield evicts —
-moves the result less than idle run-to-run variation does. Memory-bandwidth
-contention, the one condition that does register, shifts it about 5%, against
-the 11% the same measurement drifts between passes anyway.
-
-The reason is that the trimmed mean already does the shield's job from the other
-end. A preemption is orders of magnitude larger than a dispatch, so it lands in
-the discarded top 5% rather than perturbing the body. Boost.Unordered needs the
-cgroup because it measures multithreaded throughput over seconds, where stolen
-time biases the mean directly and nothing trims it; and it runs on self-hosted
-bare metal, where shielding is actually achievable.
-
-What is left over is not schedulable: DRAM timing and prefetcher state, the core
-clock — invisible and uncontrollable under this hypervisor — and Windows
-descheduling the vCPU, which no cgroup inside the VM can reach. Frequency
-pinning on bare metal would cut the cold spread; quieting this box would not.
+- Every published cell is the **median of 7 passes**; `matrix.sh` interleaves
+  the whole matrix per pass so drift lands on all columns alike, and clears
+  stale run directories first (the results are committed, so stale runs are
+  the norm, not an accident).
+- Across passes, a single variant's `net` moves by a median of **8% cold (p90
+  18%, worst 60%)** and **7% warm (p90 14%)** on this machine — an
+  un-isolatable WSL2 guest. Quote medians, not passes.
+- **The built-in control**: the three direct registries' `om vptr` rows must
+  agree — the vptr policy is not on that call path. Warm they agree to 0-6%
+  per column (exactly: net 10.8 / 10.8 / 10.8 on gcc/64 at arity 2); cold to
+  1-19%, arity 1 being the noisier. `indirect` is excluded by design — its
+  extra load is the point. If the control diverges beyond that, discard the
+  run.
+- **Shielding does not help.** Deliberate co-tenancy — spinners on other
+  cores, a spinner on the measurement core itself, 256 MiB memory streamers —
+  moves the result less than idle pass-to-pass variance, because the trimmed
+  mean already discards preemptions into its top 5%. What remains is not
+  schedulable: DRAM and prefetcher state, and the hypervisor. (Details and
+  the probe data: [HISTORY.md](HISTORY.md).)
 
 ## Method
 
 ### Timing
 
 The stop is **in the measured body**. Every yardstick, baseline and overrider
-returns a `stamp_id`: the counter read on arrival, plus an id (computed after
-the stamp) that carries the verification oracle. The measured window is:
+returns a `stamp_id`: the counter read on arrival, plus an id — computed after
+the stamp — that carries the verification oracle. The measured window is:
 
 ```
 asm barrier; lfence; rdtsc; lfence          <- start bracket, in timed_call
@@ -739,173 +546,93 @@ asm barrier; lfence; rdtsc; lfence          <- start bracket, in timed_call
 rdtscp                                      <- in the body; returned
 ```
 
-`rdtscp` waits until every prior instruction — the whole dispatch chain, and in
-the use world the receiver load kept above it by its memory clobber — has
+`rdtscp` waits until every prior instruction — the whole dispatch chain, and
+in the use world the receiver load kept above it by its memory clobber — has
 executed, so the stamp is the moment control *arrived* in the right overrider.
 Everything after it is outside the window by construction: assembling the
-64-bit value, writing the id, the entire return path, and the elapsed
-computation, which is a plain data dependency on the returned stamp
-(`cycles = r.t − t0`). Consequences, each of which used to need active
-management:
-
-- No closing bracket exists, so there is nothing for a compiler to schedule
-  differently at the stop edge — an artifact that once contaminated a
-  cross-compiler comparison here ([HISTORY.md](HISTORY.md)).
-- The return path is not measured; variants with different frame or ABI shapes
-  stopped differing for irrelevant reasons.
-- The baselines can be *chosen* per question. `probe` (the empty window) is
-  subtracted from everything: `net` is the whole call. `direct` (a real,
-  non-inlined call to a stamping body) is the reference point the tables
-  quote, and the subtrahend only of the mechanism-excess `disp` column for
-  rows that never touch the receiver.
-
-Other properties of the harness:
+stamp, writing the id, the entire return path, and the elapsed computation,
+which is a data dependency on the returned value. There is no closing bracket,
+so nothing is compiler-scheduled at the stop edge.
 
 - The start bracket lives inside a `noinline` `timed_call` whose parameters
-  are the call arguments, so the prologue is untimed while the arguments still
+  are the call arguments: the prologue is untimed while the arguments still
   arrive through the ABI and cannot be constant-folded or devirtualized.
-- The start timestamp is captured as the raw `edx:eax` pair; the elapsed
-  computation is written after the call, though the compiler is free to
-  assemble the 64-bit value earlier (gcc does, inside the window) — what
-  matters is that it does so *identically in every variant*, so it cancels
-  against the baseline. [HISTORY.md](HISTORY.md) has the evolution.
-- **Every variant replays the identical sequence of receivers**: the RNG is
-  reseeded at the start of each variant. `disp` is a difference of two
-  separate measurements, and in the cold modes both are dominated by DRAM
-  latency that depends on *which* objects were drawn; unpaired draws leave
-  that term uncancelled.
-- `lfence` is dispatch-serializing by default on Zen, so no `CPUID` is needed
-  — which is just as well, since `CPUID` traps to the hypervisor here and
-  would cost more than the thing being measured.
-- Both compilers are given `-fcf-protection=none`, because their defaults
-  differed in ways that biased the comparison ([HISTORY.md](HISTORY.md)).
+- The start timestamp is captured as the raw `edx:eax` pair; the compiler may
+  assemble the 64-bit value inside the window (gcc does) but does so
+  identically in every variant, so it cancels in `net` against `probe`.
+- **Every variant replays the identical receiver sequence** (the RNG is
+  reseeded per variant): `disp` is a difference of two measurements, and cold
+  both are dominated by which objects were drawn — unpaired draws leave that
+  term uncancelled.
+- Each rep performs an untimed warm-up call, then scrubs (in the cold mode),
+  then measures once.
+- `lfence` is dispatch-serializing on Zen, so no `CPUID` — which traps to the
+  hypervisor here and would cost more than the thing measured.
+- Both compilers get `-fcf-protection=none`; their defaults differ (gcc
+  `=full`) in ways that put an `endbr64` on every indirect-call target of one
+  build and not the other ([HISTORY.md](HISTORY.md)).
 
 ### Cache states
 
 | mode | what it does |
 |---|---|
-| `warm` | nothing, after a warm-up call — lower bound |
-| `clflush` | `clflushopt` over the object, its C++ v-table — from the v-table *head*, 16 bytes before the address point, so the `type_info` slot at vptr−8 is always evicted (it used to escape when the vptr was 64-byte aligned, a compiler-asymmetric hole) — the method's `fn` object, the registry's dispatch-table arena, and the vptr storage; then `mfence` |
-| `sweep` | one store per 64-byte line over a 64 MiB buffer (2x L3); then `mfence` |
-
-`sweep` uses ordinary stores, not `_mm_stream_*`: non-temporal stores bypass the
-cache hierarchy and would evict nothing. It is sequential rather than
-pointer-chasing because sweeping is bandwidth-bound (~1.6 ms for 64 MiB), while
-1M dependent DRAM loads would cost ~80 ms per repetition.
-
-**`sweep` is the mode to quote.** It treats every variant identically.
-`clflush` is a lower-noise diagnostic, but it **cannot reach the interior of
-`std::unordered_map` / `unordered_flat_map`** — those nodes are only reachable
-at run time — so the map registries keep bucket data resident and look better
-than they are. Compare `virtual_` ref arity 1: under `clflush` `vptr_map` (1.59x)
-appears to *beat* `vptr_vector` (2.13x); under `sweep`, which really does evict
-both, the order reverses to 1.87x vs 1.55x. That inversion is why both modes are
-reported.
+| `warm` | nothing, after the warm-up call |
+| `clflush` | `clflushopt` over the receiver(s), the C++ v-table from its head (vptr−16, so the `type_info` slot at vptr−8 is always evicted), the method's `fn` object, the registry's dispatch-table arena, the vptr storage, and — for indirect registries — the per-class `static_vptr` cells; then `mfence` |
+| `sweep` | one store per line over a 64 MiB buffer (2x L3); diagnostic only, not in the published dataset |
 
 ### Statistics
 
-Reported statistic is the **mean, trimmed of its top 5%**, with the standard
-error of the difference against the `direct` baseline in the `+/-` column.
-
-The median is shown but should not be read: an lfence-bracketed `rdtsc` pair
-costs **25 or 50 cycles, bimodally** on this machine (the raw counter does
-resolve to 1 — it is the read that is coarse), so every individual sample is
-quantized far above the cost of a warm dispatch, and the median of warm samples
-is always exactly 50. The proportion of samples landing in each mode does shift
-with the work done, so the mean resolves well below one tick. The top 5% is
-trimmed because scheduler preemptions land there and a single one moves the mean
-by more than the quantity being measured.
-
-**Cold absolutes vary ~25% run to run** (DRAM, prefetcher and hypervisor
-scheduling); the *ratio to the yardstick measured in the same run* is far more
-stable. Three runs of `om ref` arity 1 gave nets of 1648 / 2049 / 1983 but `x
-net` ratios of 1.55x / 1.50x / 1.51x. Quote ratios, not cycle counts.
-
-### Which compensation to read
-
-`net` and `disp` answer different questions and have different noise.
-
-| mode | object-touch cost | `disp` reliable? |
-|---|---|---|
-| `warm` | ~0.2 cycles | yes — though `net` and `disp` differ by the plain-call cost by construction |
-| `clflush` | ~47% of what `vf` appears to cost | yes — the compensation is large and reproducible |
-| `sweep` | ~45% of what `vf` appears to cost | **not for the fast variants** |
-
-Under a full sweep, `disp` for a fast *receiver-touching* row (the inplace
-reference form, `om ref` at arity 2) is a small residue left by subtracting two
-large DRAM-bound numbers, and its run-to-run spread is comparable to its value
-— historical probes of the then-worst case measured a 2x range before the
-receiver draws were paired and ~±13% after. The `om vptr` rows are exempt since
-the review fix: their `disp` subtracts only the direct call, never `touch`. The `x net`
-ratios stay stable throughout because the shared miss sits in both terms.
-
-So: **read `x disp` warm and under `clflush`; under `sweep` read `x net`** and
-treat it as a floor on the true ratio, since the shared miss biases it toward
-1.00x. And for the `om vptr` rows remember `disp` subtracts the direct call
-only: their cold `x disp` compares their whole mechanism against the
-yardstick's receiver-compensated one, while `x net` compares whole call
-against whole call — the headline, and the number that says "a cold
-`virtual_ptr` call costs what a cold virtual call does".
+The reported statistic is the **mean of each variant's samples, trimmed of the
+top 5%** (where preemptions land), with the standard error of the difference
+in the console's `+/-` column. Individual samples are quantized: an
+lfence-bracketed counter read costs 25 or 50 cycles bimodally here, so warm
+medians sit on a tick (50, sometimes 75) while the trimmed mean resolves well
+below one — which is also why sub-cycle warm differences should not be read
+at all. TSC frequency is calibrated against `CLOCK_MONOTONIC` at startup;
+the committed data implies ~2.45 GHz.
 
 ### Correctness gate
 
-`--verify` calls every open-method path — four registries x two call forms x two
-arities, plus the two inplace dispatches x two arities — and checks each against
-an **oracle computed from the class contracts alone**: `x + tag` for arity 1,
-the tag rule (`x + tag` iff both receivers are the same leaf, else `x`) for
-arity 2, and `x + b.tag` for the double-dispatch yardstick. Earlier versions
-compared the open methods against *each other*, which passed when every
-registry was wrong the same way — an unregistered overrider pack, say — a hole
-the adversarial review demonstrated concretely. A registry wired to
-the wrong method, or an overrider that silently failed to register, would otherwise
-produce a plausible but meaningless table. It runs automatically at startup and
-as the CMake test.
+`--verify` runs before any measurement, and its oracles are computed **from
+the class contracts alone**, carried in each body's returned id: `tag` for
+arity 1 (every world), `tag`-if-same-leaf-else-−1 for const arity 2,
+`a.tag + b.tag` / `−a.tag − b.tag − 1` for use arity 2 (distinct values, so
+the gate can tell which overrider ran), `b.tag` for the dd yardstick. Every
+dispatch path in every registry and both worlds is checked, plus the
+yardsticks and baselines themselves. Comparing paths against each other
+instead — which passes when every registry is wrong the same way — is a hole
+this gate closed after an adversarial review demonstrated it
+([HISTORY.md](HISTORY.md)).
 
 ## Caveats
 
-- **The 2-argument yardstick is a cost model, not the literal idiom.** The
-  textbook double dispatch declares one `dd_with_DerivedK` per leaf in the base;
-  with 100 leaves that is unwritable, and it would not change the cost, which is
-  two chained virtual calls either way. `Base` declares `dd` and `dd_with`, and
-  `Derived<N>::dd` calls `other.dd_with(*this, x)`. Two virtual calls, as the
-  idiom costs.
-- **Warm-mode differences of a fraction of a cycle are not trustworthy.** The
-  samples are quantized by a 25-cycle tick; the trimmed mean resolves below
-  it, but sub-cycle gaps remain at the mercy of scheduling phase. (A previous
-  window design produced a physically impossible ordering from exactly this —
-  resolved by the arrival window; the tale is in [HISTORY.md](HISTORY.md).)
-- **`touch` is a lower bound on "reaching the receiver", not an exact one.** It
-  reads `tag` at offset 8; a dispatch reads the v-table pointer at offset 0.
-  Same cache line, so the same one miss — but a `virtual_` reference dispatch
-  then chases that pointer to the `type_info`, which is a *second* miss that
-  `disp` charges to dispatch. That is the right attribution (it is work the
-  dispatch causes), but it means `disp` is not purely "arithmetic and an
-  indirect call". The `om vptr` rows sidestep the question entirely: they touch
-  no receiver, so their `disp` is defined as `net` (see "What is measured").
-- **Discard runs where the control fails.** One 6000-rep run came out with a
-  sweep block ~50% slower than its neighbours and a broken `virtual_ptr` control
-  (1525 cycles for `vptr_vector` against 922 and 800 for the map registries,
-  when all three must agree). Deliberate CPU and memory contention reproduce
-  nothing like that magnitude (see "Shielding would not help"), so the cause was
-  more likely a frequency excursion or hypervisor scheduling than a noisy
-  neighbour — which is precisely why the control, not a tidy `uptime`, is the
-  thing to check.
-- **gcc passes the 16-byte `virtual_ptr` via the stack**, so the `virtual_ptr`
-  rows pay two extra L1 loads inside the timed region that `vf` does not. This
-  biases them *against* `virtual_ptr`, so those numbers are conservative.
-- Under WSL2/Hyper-V the TSC ticks at the nominal ~2.37 GHz, so these are
-  *reference* cycles, not core cycles, and the core clock is not observable.
-  `run.sh` requests `SCHED_FIFO` and falls back to normal priority without it.
-- `registry_regions()` reaches into `boost::openmethod::detail` for the dispatch
-  table arena (`registry_state_type::dispatch_data`). Deliberate: the point of
-  `clflush` mode is to evict exactly what the dispatch reads.
+- **The receiver-touch baseline is a lower bound.** `touch` reads a member on
+  the same cache line as the object's v-table pointer, so it prices the line's
+  miss; a `virtual_` dispatch then chases that pointer to the `type_info` — a
+  second miss `disp` rightly charges to dispatch, but `disp` is not purely
+  "arithmetic plus an indirect call".
+- **Warm ratios do not transfer across binaries.** The warm yardstick is
+  mostly misprediction and its cost is layout-dependent (6.4-16.8 cycles net
+  across the four builds). Cold `x net` is the portable figure.
+- **`net` and `disp` differ by the plain-call cost by construction** (~4
+  cycles warm): `net` subtracts the empty `probe`, `disp` subtracts a real
+  call. Neither is wrong; they answer the two questions in "What the ratios
+  divide".
+- Cycles are TSC *reference* cycles at ~2.45 GHz, not core cycles; the core
+  clock is invisible under WSL2/Hyper-V. `run.sh` requests `SCHED_FIFO` and
+  falls back to normal priority without it.
+- The harness reaches into `boost::openmethod::detail` for the dispatch-table
+  arena — deliberate: `clflush` must evict exactly what the dispatch reads.
+- On the -m32 builds, clang marshals the 8-byte `virtual_ptr` through the
+  stack inside the window (see "What it shows") — read those rows as harness
+  ABI cost, not dispatch cost.
 
 ## Generated code
 
-Timed regions under the arrival window, gcc 13, `-O2`. Each ends at the `call`
-into a body whose first instruction sequence is `rdtscp` — the region has no
-closing bracket. The `mov/shl/or` around the dispatch is the start stamp's
-assembly, identical in every variant, cancelled by the `direct` baseline.
+Timed regions, gcc 13 `-O2`, current binaries. Each region ends at the `call`
+into a body whose first instruction is `rdtscp`; the `mov/shl/or` around the
+dispatch is the start stamp's bookkeeping, identical in every variant,
+cancelled by `probe`.
 
 `vf` — one dependent load, one indirect call:
 
@@ -952,47 +679,52 @@ call QWORD PTR [rax+rdx*8]       ; -> body: rdtscp
 ```
 
 Every measured body opens with the stamp; in the use world a member load of
-each receiver precedes it:
+each receiver precedes it.
 
-```asm
-; const overrider                 ; use overrider
-rdtscp                            mov  eax, DWORD PTR [rdi+0x8]   ; tag
-...                               rdtscp
-                                  ...
+## Build and run
+
+Boost (1.91+) must be installed system-wide, and `./include` must be a
+symlink into a Boost checkout — it is machine-specific and not committed:
+
+```sh
+ln -s /path/to/boost/libs/openmethod/include include
 ```
+
+```sh
+./build.sh                       # -> bin/benchmark-g++-64
+CXX=clang++ BITS=32 ./build.sh   # compiler/bitness; needs g++-multilib for -m32
+DEBUG=1 CLASSES=4 ./build.sh     # -O0 -g build for stepping through the code
+bin/benchmark-g++-64 --verify    # the correctness gate
+./run.sh                         # one build, both cache modes, on a pinned core
+RUNS=7 ./matrix.sh               # the full matrix -> results/run1..7 (as published)
+python3 report.py                # regenerates every table in this README
+```
+
+Benchmark flags: `--reps --objects --sweep-mb --cpu --seed
+--mode warm|clflush|sweep|all --csv --verify`. The class count is
+compile-time: `CLASSES=1000 ./build.sh` or `-DOMB_CLASSES` with CMake.
 
 ## Files
 
 | file | |
 |---|---|
-| `src/timing.hpp` | rdtsc harness, cache modes, TSC calibration, statistics |
-| `src/hierarchy.hpp` | `Base` + `Derived<N>` and the `inplace_vptr` hierarchy `IBase<R>` + `IDerived<R,N>`, plus the virtual-function yardsticks |
-| `src/registries.hpp` | the six dispatch configurations, the six methods, bulk overrider registration |
-| `src/main.cpp` | variant table, measurement loop, verification, reporting |
-| `matrix.sh` | builds and verifies all four compiler x bitness combinations, N passes each |
-| `report.py` | renders the two matrix tables from `results/run*/` |
-| `include` | symlink into a Boost checkout's `libs/openmethod/include` (not committed) |
+| `src/timing.hpp` | brackets, stamps, cache scrubbing, TSC calibration, statistics |
+| `src/hierarchy.hpp` | both class hierarchies, yardsticks, the `touch` baselines |
+| `src/registries.hpp` | the six dispatch configurations and the const-body methods |
+| `src/use_methods.hpp` | the use-body methods and overriders |
+| `src/main.cpp` | variants, measurement loop, verification, reporting |
+| `matrix.sh` | builds, verifies and measures all four compiler x bitness builds, N passes |
+| `run.sh` | single-build driver on a pinned core |
+| `report.py` | regenerates every generated section of this README from `results/` |
+| `results/run1..7/` | the committed dataset behind every table |
+| `include` | symlink into a Boost checkout (not committed) |
 
-Overriders are registered in bulk over the generated hierarchy through the core
-API rather than the `BOOST_OPENMETHOD_*` macros, since `Derived<N>` is a
-template. `method<...>::override` takes a *pack* of functions, so one static
-registrar object carries all 100:
-
-```cpp
-template<class R, std::size_t... I>
-auto poke_ref_registrar(std::index_sequence<I...>)
-    -> typename poke_ref<R>::template override<poke_ref_impl<R, I>...>;
-
-BOOST_OPENMETHOD_REGISTER(decltype(poke_ref_registrar<R>(all_indices{})));
-BOOST_OPENMETHOD_REGISTER(mp::mp_apply<om::use_classes, class_list<R>>);
-```
+Overriders are registered in bulk through the core API (`method<...>::override`
+takes a pack), since the leaves are a class template.
 
 ## History
 
 This benchmark was corrected into its current design through an adversarial
 review and several measurement-scheme redesigns, each of which changed what
 the timed window contains — and therefore what the numbers mean.
-[HISTORY.md](HISTORY.md) is the chronicle: the review findings, the receiver
-asymmetry that led to the two worlds, the arrival window, the
-excess-versus-whole-call correction, and the artifacts that each redesign
-explained or dissolved.
+[HISTORY.md](HISTORY.md) is the chronicle.
