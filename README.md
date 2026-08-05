@@ -237,8 +237,9 @@ isolates the library.
 `x vf` in the warm tables and `x net` in the cold ones divide **whole call by
 whole call** — the question this benchmark exists to answer. The `disp` column
 and `x disp` are the mechanism-excess diagnostics; "What the ratios divide"
-below explains the distinction. For scale, a direct call measures 3.7 cycles
-net warm.
+below explains the distinction, and [HISTORY.md](HISTORY.md) explains why
+ratios from earlier revisions of this README are not comparable with these.
+For scale, a direct call measures 3.7 cycles net warm.
 
 - **A `virtual_ptr` call costs exactly what a virtual function call costs**:
   1.00x warm (10.2 vs 10.4 cycles), 1.03x cold. Not "no more than" — the same,
@@ -302,8 +303,9 @@ Two ratio families appear in the tables, and they answer different questions:
 - **`x disp`** divides *excesses*: each mechanism's cost above a plain call
   (and above reaching the receiver, where it is owed). Subtracting a shared
   constant from both sides pushes ratios away from 1, so these read larger —
-  deliberately: they isolate the machinery. An earlier revision briefly made
-  this the headline; it is a diagnostic, not the verdict.
+  deliberately: they isolate the machinery. It is a diagnostic, not the
+  verdict ([HISTORY.md](HISTORY.md) records the revision that briefly thought
+  otherwise).
 
 `direct` itself is never subtracted from the headline: comparing an open
 method with a virtual function does not require deciding what a plain call
@@ -670,45 +672,6 @@ The practical consequence: compare cycle columns across compilers, and treat a
 cross-compiler difference in `x vf` as a statement about the denominator until
 shown otherwise.
 
-### Two flags that had to be equalised
-
-Both were found by reading disassembly, and both had been silently biasing the
-compiler axis:
-
-- **`-fcf-protection=none`.** Ubuntu's gcc defaults to `=full`, clang to none, so
-  the gcc binary carried 7391 `endbr64` landing pads against clang's 5 — one at
-  the top of every indirect-call target, including every overrider and every
-  virtual function. The axis was comparing a distribution's hardening policy, not
-  code generation. Both builds now pass `-fcf-protection=none` and the callees are
-  byte-identical:
-
-  ```asm
-  ; gcc, before          ; gcc and clang, now
-  endbr64                lea eax, [rsi+0x1]
-  lea eax, [rsi+0x1]     ret
-  ret
-  ```
-
-- **How the timestamp is assembled** — see the next section.
-
-### Why the timestamp is assembled afterwards
-
-`rdtsc` returns the counter in `edx:eax`. With the `__rdtsc()` intrinsic, the
-64-bit assembly — `shl`, `mov`, `or` — was compiler-scheduled, and in the era
-when this harness had a *closing* bracket too, each compiler placed it
-differently: gcc inside the measured window, clang outside, and in one baseline
-clang sank the `or` past the work, so the arithmetic did not cancel in `disp`
-and the cross-compiler columns carried a scheduling artifact.
-
-Two designs removed the problem in sequence. First, both brackets captured raw
-`lo`/`hi` in inline asm and assembled afterwards, making the bookkeeping
-identical across every variant within a compiler. Then the closing bracket was
-abolished altogether — the stop moved into the measured bodies (see "Timing"),
-which is *our* code, emitted identically everywhere. What survives of the
-original issue is the start side: `tsc_start` captures the raw pair, and gcc
-happens to assemble it inside the window — identically in every variant, so it
-cancels against the `direct` baseline.
-
 ### Reproducibility, and why seven passes
 
 A single cold pass moves by a median of 11% between repeats (p90 40%, max 73%)
@@ -782,7 +745,7 @@ management:
 
 - No closing bracket exists, so there is nothing for a compiler to schedule
   differently at the stop edge — an artifact that once contaminated a
-  cross-compiler comparison here (see "Two flags that had to be equalised").
+  cross-compiler comparison here ([HISTORY.md](HISTORY.md)).
 - The return path is not measured; variants with different frame or ABI shapes
   stopped differing for irrelevant reasons.
 - The baselines can be *chosen* per question. `probe` (the empty window) is
@@ -800,8 +763,7 @@ Other properties of the harness:
   computation is written after the call, though the compiler is free to
   assemble the 64-bit value earlier (gcc does, inside the window) — what
   matters is that it does so *identically in every variant*, so it cancels
-  against the `direct` baseline. "Why the timestamp is assembled afterwards"
-  has the history.
+  against the baseline. [HISTORY.md](HISTORY.md) has the evolution.
 - **Every variant replays the identical sequence of receivers**: the RNG is
   reseeded at the start of each variant. `disp` is a difference of two
   separate measurements, and in the cold modes both are dominated by DRAM
@@ -811,8 +773,7 @@ Other properties of the harness:
   — which is just as well, since `CPUID` traps to the hypervisor here and
   would cost more than the thing being measured.
 - Both compilers are given `-fcf-protection=none`, because their defaults
-  differed in ways that biased the comparison — see "Two flags that had to be
-  equalised".
+  differed in ways that biased the comparison ([HISTORY.md](HISTORY.md)).
 
 ### Cache states
 
@@ -905,12 +866,9 @@ as the CMake test.
   idiom costs.
 - **Warm-mode differences of a fraction of a cycle are not trustworthy.** The
   samples are quantized by a 25-cycle tick; the trimmed mean resolves below
-  it, but sub-cycle gaps remain at the mercy of scheduling phase. A cautionary
-  tale from this benchmark's own history: the previous, return-path-inclusive
-  window reported arity 2 as *cheaper* than arity 1 for `virtual_` reference
-  dispatch — physically impossible, and listed here as an unexplained artifact
-  for several revisions. Under the arrival window the inversion is gone
-  (11.8 < 13.4 warm): it lived in the return path, not in the dispatch.
+  it, but sub-cycle gaps remain at the mercy of scheduling phase. (A previous
+  window design produced a physically impossible ordering from exactly this —
+  resolved by the arrival window; the tale is in [HISTORY.md](HISTORY.md).)
 - **`touch` is a lower bound on "reaching the receiver", not an exact one.** It
   reads `tag` at offset 8; a dispatch reads the v-table pointer at offset 0.
   Same cache line, so the same one miss — but a `virtual_` reference dispatch
@@ -1023,3 +981,13 @@ auto poke_ref_registrar(std::index_sequence<I...>)
 BOOST_OPENMETHOD_REGISTER(decltype(poke_ref_registrar<R>(all_indices{})));
 BOOST_OPENMETHOD_REGISTER(mp::mp_apply<om::use_classes, class_list<R>>);
 ```
+
+## History
+
+This benchmark was corrected into its current design through an adversarial
+review and several measurement-scheme redesigns, each of which changed what
+the timed window contains — and therefore what the numbers mean.
+[HISTORY.md](HISTORY.md) is the chronicle: the review findings, the receiver
+asymmetry that led to the two worlds, the arrival window, the
+excess-versus-whole-call correction, and the artifacts that each redesign
+explained or dissolved.
