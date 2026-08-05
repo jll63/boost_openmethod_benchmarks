@@ -155,12 +155,14 @@ column of the matrix below). `net` is reference cycles above the `direct`
 baseline; `x vf` is
 the ratio to the virtual-function yardstick of the same arity.
 
-### Warm caches — the sharpest numbers
+### Warm caches — the finest resolution
 
-Nothing is evicted, so reaching the receiver is almost free: the `touch` baseline
-measures only 0.2 cycles more than a plain call. `net` and `disp` therefore agree, and both are
-stable to ~1 cycle run to run. The `inplace` rows are ratioed against the inplace
-hierarchy's own `vf`, which measures within a cycle of the main one.
+Warm mode resolves the mechanisms' few-cycle differences: reaching the receiver
+costs 0.2 cycles here, and rows repeat within a build to a percent or two.
+But the yardstick is mostly indirect-branch misprediction, which depends on the
+binary's layout — across the four builds its net ranges severalfold — so warm
+*ratios* are build-local. For figures that transfer, read the cold table below.
+The `inplace` rows are ratioed against the inplace hierarchy's own `vf`.
 
 Median of 7 passes.
 
@@ -191,13 +193,15 @@ For scale: a direct call to a stamping body measures 3.7 cycles net here.
 | `om ref / inplace` | 2 | 10.8 | 0.53x | 6.6 |
 | `om ref / inplace_ind` | 2 | 12.5 | 0.60x | 8.4 |
 
-### Caches cold (`clflush`)
+### Caches cold (`clflush`) — the steadiest ratios
 
 Flushed, the first touch of the receiver is a cache miss in its own right: the
 `touch` baseline nets 264 cycles, against 567 for the whole `vf`
 yardstick. So 47% of a virtual call's `net` is reaching the object rather than
-dispatching on it. `x net` compares whole call with whole call — the headline;
-`disp` and `x disp` are the mechanism-excess diagnostics.
+dispatching on it. `x net` compares whole call with whole call — the headline,
+and the most reproducible figure this benchmark produces: misses dominate, and
+misses do not care about code layout. `disp` and `x disp` are the
+mechanism-excess diagnostics.
 
 Median of 7 passes.
 
@@ -244,12 +248,13 @@ For scale, a direct call measures 3.7 cycles net warm.
 - **A `virtual_ptr` call costs exactly what a virtual function call costs**:
   1.00x warm (10.2 vs 10.4 cycles), 1.03x cold. Not "no more than" — the same,
   across every direct registry (the control trio reads 1.00x / 1.01x / 1.00x).
-- **`virtual_` reference dispatch costs 1.56x a virtual call warm and 1.98x
-  cold** on this machine — above the 30-50% band `performance.adoc` cites.
-  The band's numbers date from a different harness on different hardware; this
-  one's cold figure is strikingly stable across builds (1.98x / 2.05x / 1.98x
-  / 2.01x). The excess is the hash-and-look-up, which the `disp` column
-  isolates at ~6 extra cycles warm.
+- **`virtual_` reference dispatch costs about 2x a virtual call cold — the
+  figure that holds across every build** (1.98x / 2.05x / 1.98x / 2.01x), and
+  above the 30-50% band `performance.adoc` cites (whose numbers date from a
+  different harness on different hardware). Warm the ratio reads 1.56x on
+  gcc/64 but ranges 1.42x-2.10x across builds with the yardstick's
+  misprediction cost — a build-local figure. The excess is the
+  hash-and-look-up, which the `disp` column isolates at ~6 extra cycles warm.
 - **`vptr_map` costs 2.46x warm through a reference** — its probe adds ~9
   cycles over `fast_perfect_hash`'s multiply-shift — and
   `boost::unordered_flat_map` measures the same (2.48x). Cold the gap narrows
@@ -822,7 +827,7 @@ net` ratios of 1.55x / 1.50x / 1.51x. Quote ratios, not cycle counts.
 
 | mode | object-touch cost | `disp` reliable? |
 |---|---|---|
-| `warm` | ~1 cycle | yes — `disp` ≈ `net`, both stable to ~1 cycle |
+| `warm` | ~0.2 cycles | yes — though `net` and `disp` differ by the plain-call cost by construction |
 | `clflush` | ~47% of what `vf` appears to cost | yes — the compensation is large and reproducible |
 | `sweep` | ~45% of what `vf` appears to cost | **not for the fast variants** |
 

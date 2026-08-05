@@ -130,14 +130,15 @@ def section_results(data, passes):
     direct_m = med(data, ("warm", "main", "-", "baseline", "direct", 0), "mean")
     touch_m = med(data, ("warm", "main", "-", "baseline", "touch", 1), "mean")
 
-    print("### Warm caches — the sharpest numbers\n")
-    print(f"Nothing is evicted, so reaching the receiver is almost free: the "
-          f"`touch` baseline\nmeasures only {touch_m - direct_m:.1f} cycles more than "
-          f"a plain call. "
-          f"`net` and `disp` therefore agree, and both are\nstable to ~1 cycle "
-          f"run to run. The `inplace` rows are ratioed against the inplace\n"
-          f"hierarchy's own `vf`, which measures within a cycle of the main "
-          f"one.\n")
+    print("### Warm caches — the finest resolution\n")
+    print(f"Warm mode resolves the mechanisms' few-cycle differences: reaching "
+          f"the receiver\ncosts {touch_m - direct_m:.1f} cycles here, and rows "
+          f"repeat within a build to a percent or two.\nBut the yardstick is "
+          f"mostly indirect-branch misprediction, which depends on the\n"
+          f"binary's layout — across the four builds its net ranges severalfold "
+          f"— so warm\n*ratios* are build-local. For figures that transfer, "
+          f"read the cold table below.\nThe `inplace` rows are ratioed against "
+          f"the inplace hierarchy's own `vf`.\n")
     print(f"Median of {passes} passes.\n")
     direct = med(data, ("warm", "main", "-", "baseline", "direct", 0), "net")
     print(f"For scale: a direct call to a stamping body measures "
@@ -156,13 +157,15 @@ def section_results(data, passes):
     touch_m = med(data, ("clflush", "main", "-", "baseline", "touch", 1), "net")
     vfn = med(data, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
 
-    print("\n### Caches cold (`clflush`)\n")
+    print("\n### Caches cold (`clflush`) — the steadiest ratios\n")
     print(f"Flushed, the first touch of the receiver is a cache miss in its own "
           f"right: the\n`touch` baseline nets {touch_m:.0f} cycles, "
           f"against {vfn:.0f} for the whole `vf`\nyardstick. So "
           f"{touch_m / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
           f"object rather than\ndispatching on it. `x net` compares whole call "
-          f"with whole call — the headline;\n`disp` and `x disp` are the "
+          f"with whole call — the headline,\nand the most reproducible figure "
+          f"this benchmark produces: misses dominate, and\nmisses do not care "
+          f"about code layout. `disp` and `x disp` are the\n"
           f"mechanism-excess diagnostics.\n")
     print(f"Median of {passes} passes.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")

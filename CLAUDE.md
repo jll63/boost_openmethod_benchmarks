@@ -206,9 +206,11 @@ already bitten:
 - A single cold pass moves by a median of 11% between repeats (p90 40%). `matrix.sh` therefore loops
   the whole matrix and `report.py` takes the **median across passes**; looping the matrix rather
   than repeating each build in place also spreads drift over all four columns.
-- Warm is the reliable mode (a few percent between passes). Warm differences of a *few cycles* are
-  still untrustworthy — the bimodal floor's phase interacts with instruction schedule, which has
-  twice produced physically impossible readings that vanished on re-measurement.
+- Warm has the finest resolution *within* a build (a few percent between passes) but its ratios
+  are build-local: the warm yardstick is mostly indirect-branch misprediction, whose cost depends
+  on binary layout (its net ranges severalfold across the four builds). The cold whole-call ratios
+  are the reproducible characterization (~4% across builds for `om ref`). Sub-cycle warm gaps
+  remain untrustworthy — scheduling phase; see HISTORY.md for the artifacts this produced.
 - **Do not bother shielding the benchmark** (cgroup cpuset, `isolcpus`, `cgexec`). Measured: a
   spinner on the measurement core itself moves the result less than idle run-to-run variation, and
   memory-bandwidth contention shifts it ~5% against 11% intrinsic drift. The trimmed mean already
