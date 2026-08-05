@@ -91,10 +91,10 @@ their own 2 x 2 yardsticks). The baselines are body-neutral and shared.
 
 Two compensations are applied, giving two columns:
 
-- **`net` = mean − `probe`** subtracts the apparatus only — the bracket and
-  the stamp, nothing else. `net` is therefore the full arrival cost of the
-  call, and **`x net` is the headline ratio: whole call against whole call**,
-  which is the comparison this benchmark exists to make.
+- **`net` = mean − `probe`** subtracts the cost of the measurement itself,
+  nothing else. `net` is therefore the full cost of the call, and **`x net` is
+  the headline ratio: whole call against whole call**, which is the comparison
+  this benchmark exists to make.
 - **`disp` = mean − `nvf` of the same arity** additionally removes the cost of
   *reaching* the receiver. In the cold modes that is 40-45% of what a virtual
   call appears to cost, and it is common to every variant that dereferences the
