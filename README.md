@@ -64,7 +64,7 @@ Five axes, plus yardsticks and baselines:
 | bitness | 64-bit vs 32-bit (`-m32`) |
 | body | `const` — overrider and virtual bodies return a compile-time constant, the receiver is touched only if the mechanism itself requires it; `use` — every body reads a member of every receiver (see "Two fair comparisons") |
 | yardstick | `vf` — one virtual call; `vf+vf` — the double dispatch idiom, two chained virtual calls; each in both body flavors |
-| baseline | `probe` — the empty window: start bracket and stamp, nothing called; `direct` — a direct, non-inlined call to a stamping body, reported as a reference point; `nvf` / `nvf+nvf` — a non-virtual member call that loads the receiver(s), then stamps |
+| baseline | three measurements that calibrate the others: `probe` runs the timing machinery with nothing inside it — its cost is the measurement apparatus, and subtracting it from a row gives `net`, the call's true cost; `direct` is a plain (non-virtual, non-inlined) function call, quoted with the tables for scale; `nvf` is a plain call that also loads the receiver — subtracting it isolates dispatch from the cost of reaching the object (`disp`). How each is built is in "Timing" |
 
 In the `dispatch` row, the first four values are registries and the last two are
 not — `inplace_vptr` is a CRTP mixin, not a policy — so that axis is named for
