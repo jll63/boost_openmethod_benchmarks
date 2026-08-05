@@ -5,8 +5,9 @@ against a virtual function call as the yardstick. The headline, on this
 machine: a `virtual_ptr` call costs exactly what a virtual function call costs
 (1.00x warm, 1.03x cold), `virtual_` reference dispatch costs about 2x a
 virtual call cold — a figure stable within 4% across two compilers and two
-bitnesses — and an open multi-method beats the double-dispatch idiom in every
-configuration measured.
+bitnesses — and at two virtual arguments the winner depends on temperature: an
+open multi-method through `virtual_ptr` halves the double-dispatch idiom's
+cost warm, while cold the idiom's two lean chains win back a modest 14%.
 
 Boost.OpenMethod's documentation cites "micro- and RDTSC-based benchmarks" for
 its performance claims; this repository is such a benchmark, built to be
@@ -75,8 +76,10 @@ All six dispatch values are registries in the code; the last two have no
 mixin, so those two are measured through a reference only (a `virtual_ptr`
 would carry a pointer the object already holds). They also need their own
 class hierarchy — an inplace class binds to exactly one registry — with their
-own yardsticks and baselines, whose `vf` measures within a cycle of the main
-hierarchy's.
+own yardsticks and baselines. Every inplace ratio divides by its own
+hierarchy's yardstick; the yardsticks agree warm to a fraction of a cycle on
+most builds (2.6 cycles on clang/32), and cold differ ~10% — which is exactly
+why per-hierarchy yardsticks exist.
 
 Two yardsticks, in both body flavors: `vf`, one virtual call, and `vf+vf`, the
 double-dispatch idiom — two chained virtual calls. (The idiom is modeled, not
@@ -94,10 +97,11 @@ Four baselines calibrate everything:
   Subtracting it isolates dispatch from the cost of reaching the object
   (**`disp`**).
 
-That comes to 60 variants — 34 const-body (22 on the main hierarchy: 4
-registries x 2 call forms x 2 arities plus 2 yardsticks and 4 baselines, plus
-6 on each inplace hierarchy) and 26 use-body — each measured in the two
-published cache states, warm and cold (`clflush`). A third state, a 64 MiB
+That comes to 60 variants per cache state: 26 const-body and 26 use-body
+dispatch-and-yardstick rows (per world: 16 main-hierarchy dispatches, 2 main
+yardsticks, and 2 dispatches + 2 yardsticks on each inplace hierarchy), plus
+8 body-neutral baselines. Two cache states are published, warm and cold
+(`clflush`). A third state, a 64 MiB
 cache sweep, exists in the binary as a diagnostic but is not part of the
 published dataset.
 
@@ -221,9 +225,13 @@ comparable; [HISTORY.md](HISTORY.md) has the lineage.
   narrows (1.44x) because everyone's misses dominate.
 - **`inplace_vptr` is indistinguishable from a virtual function** (1.00x warm,
   1.13x cold): its layout *is* the virtual function's layout.
-- **At two virtual arguments the multi-method beats double dispatch in every
-  form**: 0.52x through `virtual_ptr` warm, 1.14x net cold against an idiom
-  paying two dependent chains (the reference form: 2.15x).
+- **At two virtual arguments, who wins depends on temperature.** Warm, the
+  multi-method through `virtual_ptr` costs 0.52x the double-dispatch idiom —
+  two independent lookups against two dependent virtual calls. Cold the idiom
+  wins: 1.14x net for the `virtual_ptr` form and 2.15x for the reference form,
+  because the two-dimensional dispatch data spans more cache lines than the
+  idiom's two v-table chains. (In the map registries, even warm reference
+  dispatch loses to the idiom.)
 - **`indirect_vptr` prices its extra dereference at about one cycle warm
   through a `virtual_ptr`** (1.00x → 1.08x) and three through a reference
   (1.56x → 1.85x); the section below itemizes it.
@@ -341,7 +349,8 @@ mov  rdi, QWORD PTR [rsp]            mov  rdi, QWORD PTR [rsp]
 call QWORD PTR [rcx+rax*8]           call QWORD PTR [rax+rdx*8]
 ```
 
-(The start stamp's register bookkeeping, identical in both, is elided.)
+(The start stamp's register bookkeeping is elided; the compiler schedules a
+sub-cycle portion of it differently between the two.)
 
 ### What it costs in cycles
 
@@ -399,8 +408,8 @@ generate different code for the yardstick itself.
 
 The bitness axis is real at the data-structure level: at `-m32`,
 `sizeof(void*)` and the dispatch-table word halve to 4 bytes and
-`virtual_ptr` halves to 8 bytes (still two words). All four builds pass
-`--verify`. (Upstream CI exercises 32-bit builds for both MSVC and gcc, per
+`virtual_ptr` halves to 8 bytes (still two words). All four builds of the
+committed sources pass `--verify`. (Upstream CI exercises 32-bit builds for both MSVC and gcc, per
 `.drone.jsonnet`; this benchmark adds measured 32-bit numbers.)
 
 #### Caches cold (`clflush`)
@@ -478,8 +487,8 @@ Median of 7 passes. Spread across passes: median 8%, p90 19%.
   marshals the 8-byte fat pointer through the stack inside the timed window
   (~10.7 warm disp against 5.8-6.9 on the other builds) — the by-value
   argument meeting that ABI, not the library.
-- **`inplace` is the fastest reference dispatch in every column**, at ~1.1x
-  net cold across all four builds.
+- **`inplace` is the fastest reference dispatch in every column** — cold,
+  1.09x-1.13x net at arity 1 (1.16x-1.40x at arity 2) across the four builds.
 
 ## gcc against clang, instruction by instruction
 
@@ -518,11 +527,13 @@ archived in [HISTORY.md](HISTORY.md).
   the norm, not an accident).
 - Across passes, a single variant's `net` moves by a median of **8% cold (p90
   18%, worst 60%)** and **7% warm (p90 14%)** on this machine — an
-  un-isolatable WSL2 guest. Quote medians, not passes.
+  un-isolatable WSL2 guest. (The matrix captions quote a slightly larger
+  spread — that one is measured on the *ratios*, so it also absorbs the
+  yardstick's own motion.) Quote medians, not passes.
 - **The built-in control**: the three direct registries' `om vptr` rows must
-  agree — the vptr policy is not on that call path. Warm they agree to 0-6%
-  per column (exactly: net 10.8 / 10.8 / 10.8 on gcc/64 at arity 2); cold to
-  1-19%, arity 1 being the noisier. `indirect` is excluded by design — its
+  agree — the vptr policy is not on that call path. Warm they agree to 0-9%
+  per column (exactly 10.8 / 10.8 / 10.8 net on gcc/64 at arity 2; the worst
+  is gcc/32 at arity 2, ~9%); cold to 1-19%, arity 1 being the noisier. `indirect` is excluded by design — its
   extra load is the point. If the control diverges beyond that, discard the
   run.
 - **Shielding does not help.** Deliberate co-tenancy — spinners on other
@@ -557,9 +568,12 @@ so nothing is compiler-scheduled at the stop edge.
 - The start bracket lives inside a `noinline` `timed_call` whose parameters
   are the call arguments: the prologue is untimed while the arguments still
   arrive through the ABI and cannot be constant-folded or devirtualized.
-- The start timestamp is captured as the raw `edx:eax` pair; the compiler may
-  assemble the 64-bit value inside the window (gcc does) but does so
-  identically in every variant, so it cancels in `net` against `probe`.
+- The start timestamp is captured as the raw `edx:eax` pair; the compiler
+  schedules the two or three ALU ops that assemble it as it pleases — inside
+  the window for some variants, partly or wholly after the stop for others
+  (`probe` carries none in-window). The asymmetry is bounded by a couple of
+  register-ALU ops, sub-cycle on this core, and is the floor on how finely
+  warm figures should be read.
 - **Every variant replays the identical receiver sequence** (the RNG is
   reseeded per variant): `disp` is a difference of two measurements, and cold
   both are dominated by which objects were drawn — unpaired draws leave that
@@ -599,7 +613,7 @@ arity 1 (every world), `tag`-if-same-leaf-else-−1 for const arity 2,
 `a.tag + b.tag` / `−a.tag − b.tag − 1` for use arity 2 (distinct values, so
 the gate can tell which overrider ran), `b.tag` for the dd yardstick. Every
 dispatch path in every registry and both worlds is checked, plus the
-yardsticks and baselines themselves. Comparing paths against each other
+yardsticks and the `touch` baseline. Comparing paths against each other
 instead — which passes when every registry is wrong the same way — is a hole
 this gate closed after an adversarial review demonstrated it
 ([HISTORY.md](HISTORY.md)).
@@ -623,6 +637,10 @@ this gate closed after an adversarial review demonstrated it
   falls back to normal priority without it.
 - The harness reaches into `boost::openmethod::detail` for the dispatch-table
   arena — deliberate: `clflush` must evict exactly what the dispatch reads.
+- **`clflush` cannot reach the map registries' bucket arrays** — they are
+  runtime-allocated, and only the container header is flushed — so the
+  `vptr_map`/`flat_map` cold rows keep some interior state resident and read
+  slightly better than a truly cold map would.
 - On the -m32 builds, clang marshals the 8-byte `virtual_ptr` through the
   stack inside the window (see "What it shows") — read those rows as harness
   ABI cost, not dispatch cost.
@@ -630,9 +648,10 @@ this gate closed after an adversarial review demonstrated it
 ## Generated code
 
 Timed regions, gcc 13 `-O2`, current binaries. Each region ends at the `call`
-into a body whose first instruction is `rdtscp`; the `mov/shl/or` around the
-dispatch is the start stamp's bookkeeping, identical in every variant,
-cancelled by `probe`.
+into a body whose first instruction is `rdtscp`; the `mov`/`shl`/`or` around
+the dispatch is the start stamp's bookkeeping, which the compiler schedules
+freely (here inside the window; in other variants partly after the call) — a
+sub-cycle asymmetry, per "Timing".
 
 `vf` — one dependent load, one indirect call:
 
@@ -695,7 +714,7 @@ ln -s /path/to/boost/libs/openmethod/include include
 CXX=clang++ BITS=32 ./build.sh   # compiler/bitness; needs g++-multilib for -m32
 DEBUG=1 CLASSES=4 ./build.sh     # -O0 -g build for stepping through the code
 bin/benchmark-g++-64 --verify    # the correctness gate
-./run.sh                         # one build, both cache modes, on a pinned core
+./run.sh                         # one build, all three cache modes, pinned core
 RUNS=7 ./matrix.sh               # the full matrix -> results/run1..7 (as published)
 python3 report.py                # regenerates every table in this README
 ```
