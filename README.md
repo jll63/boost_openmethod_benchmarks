@@ -107,17 +107,32 @@ published dataset.
 
 ### What the ratios divide
 
-- **`x net` = `net` / yardstick's `net`** divides whole-call costs. This is
-  "how much slower is an open-method call than a virtual function call" — the
-  benchmark's question, and **the headline in every table**.
-- **`x disp`** divides *excesses*: each mechanism's cost above a plain call
-  (or above reaching the receiver, where it is owed). Subtracting a shared
-  constant pushes ratios away from 1, so these read larger — deliberately:
-  they isolate the machinery. Diagnostics, not the verdict.
+Every row yields two costs, and each is divided by the yardstick's same cost
+to make a ratio:
 
-`om vptr` rows with const bodies never touch the receiver, so their `disp`
-subtracts the `direct` baseline — the mechanism they replace is a plain call —
-where every receiver-touching row subtracts `touch`.
+- **`net` = mean − `probe`**: the whole call, with only the measurement
+  apparatus removed.
+- **`disp`**: the dispatch machinery alone — the row minus a baseline that
+  does everything *except* dispatch. Receiver-touching rows subtract `touch`
+  (a plain call that loads the receiver); the const-body `om vptr` rows,
+  which never touch the receiver, subtract `direct` (a plain call).
+
+Worked example — warm, gcc/64, `om ref` against the `vf` yardstick:
+
+| | `vf` | `om ref` | ratio |
+|---|---|---|---|
+| whole call (`net`) | 10.4 | 16.1 | **1.55x = `x net`** |
+| − the `touch` baseline | −4.2 | −4.2 | |
+| machinery alone (`disp`) | 6.1 | 11.9 | **1.94x = `x disp`** |
+
+Same two rows, two honest ratios, answering different questions. `x net`
+answers the caller's: *if I replace this virtual call with an open-method
+call, how much slower is the call?* — half again as slow. `x disp` answers
+the implementer's: *how much more work does the lookup machinery itself do?*
+— nearly twice as much. The second always reads larger, mechanically:
+subtracting the same 4.2 cycles from both sides of a division pushes the
+ratio away from 1. Neither is wrong; **`x net` is the headline in every
+table, `x disp` the diagnostic.**
 
 ## Results
 
