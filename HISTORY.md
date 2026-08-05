@@ -139,6 +139,62 @@ apparatus only), `x net` became the headline, and `direct` was demoted to a
 reference point quoted with the tables. The README's "What the ratios divide"
 section exists so the two ratio families can never be conflated again.
 
+## Warm was never the sharpest (`c9755d6`)
+
+The warm tables carried the heading "the sharpest numbers" from the earliest
+design, when it meant pass-to-pass repeatability. Challenged, the claim
+collapsed on two counts. The caption's reasoning — "`net` and `disp` therefore
+agree" — had been true under the direct-based net and silently false since the
+probe correction (they differ by the plain-call cost by construction). And the
+sharpness itself inverted under measurement: warm `om ref` ratios spread 42%
+*across builds*, because a warm virtual call is mostly indirect-branch
+misprediction and the predictor's behaviour depends on binary layout (the warm
+yardstick ranged 6.4-16.8 cycles net over the four builds), while the cold
+whole-call ratio held to 3.8%. The headings became "the finest resolution"
+(warm — build-local ratios) and "the steadiest ratios" (cold).
+
+## The chronicle splits out, the README gets audited (`1d290b0`, `d9fe8b9`)
+
+The history moved into this file so the README could be results-first — and
+promptly proved it needed more than trimming. A four-lens adversarial audit
+(scheme leftovers, figure verification, structure, claims-vs-code) confirmed
+**54 defects** in the README: figures from three different measurement
+vintages quoted side by side as current; the entire "sweep is the mode to
+quote" doctrine recommending a mode absent from the published dataset; "read
+`x disp`" advice inverting the current headline; a `net = mean − direct`
+definition surviving in the Results intro; a false claim that upstream 32-bit
+CI was MSVC-only (gcc had carried `ADDRMD: '32,64'` all along — the claim came
+from a commit message never checked against the file); a TSC figure 3.5% off
+what the committed data implies; and stale reproducibility spreads from two
+schemes ago.
+
+Rather than patch, the README was rewritten from scratch: 730 lines from 993,
+results-first, one telling of each concept, every inline figure re-derived
+from the committed dataset, fresh disassembly. The audit also surfaced one
+code gap: `verify()` had skipped the use-world `virtual_ptr` methods for the
+two map registries; the gate now covers every path.
+
+## The document gets the code's treatment (`60bf2e1`)
+
+A fresh three-lens verification of the rewritten README caught the rewrite
+minting its own errors — the worst being wishful: the opening claimed the
+multi-method beats double dispatch "in every configuration measured" while
+its own supporting bullet cited **1.14x cold** — a losing number — as
+evidence. The honest split: warm through `virtual_ptr` the multi-method
+halves the idiom's cost (0.52x); cold, the idiom's two lean chains win back
+14%, because the two-dimensional dispatch data spans more cache lines than
+two v-table chains; and the map registries' reference form loses even warm.
+
+The same pass killed a fresh overclaim that the start-stamp bookkeeping is
+"identical in every variant and cancels against `probe`" — the disassembly
+shows gcc scheduling those ALU ops differently per variant, with none at all
+inside `probe`'s window; it is now documented as a bounded sub-cycle
+asymmetry, the floor on reading warm figures. And it restored a caveat the
+rewrite had lost: `clflush` cannot evict the map registries' runtime-allocated
+bucket arrays, so their cold rows read slightly better than a truly cold map
+would. The moral joined the project's working rules: rewritten prose gets the
+same adversarial gate as new code, because fresh text mints fresh errors.
+
 ## Odds and ends
 
 - A cgroup-shielding experiment (à la Boost.Unordered's `cgexec` runs) showed
@@ -149,8 +205,16 @@ section exists so the two ratio families can never be conflated again.
   "non-virtual `vf`", coined when there was exactly one virtual function to be
   the non-virtual sibling of, and expanding to *non-virtual virtual function*
   ever after. It is now `touch` (`c6227ef`).
-- The misprediction experiment quoted in the README's compiler section
-  (`CLASSES=1` vs 100) was measured under the previous window; its point — a
-  virtual call's cost is mostly indirect-branch misprediction, and yardstick
-  differences between compilers are BTB behaviour, not dispatch quality —
-  survives every scheme.
+- The misprediction experiment (`CLASSES=1` vs 100) was measured under the
+  previous, return-path-inclusive window; its point — a virtual call's cost is
+  mostly indirect-branch misprediction, and yardstick differences between
+  compilers are BTB behaviour, not dispatch quality — survives every scheme.
+  The archived data (that scheme's `disp`, warm, not comparable with current
+  tables):
+
+  | `disp` cycles, warm | gcc | clang |
+  |---|---|---|
+  | `vf`, 1 class (predictable) | 2.4 | 6.3 |
+  | `vf`, 100 classes (mispredicted) | 14.6 | 11.6 |
+  | `om ref`, 1 class | 9.0 | 9.3 |
+  | `om ref`, 100 classes | 18.7 | 18.2 |
