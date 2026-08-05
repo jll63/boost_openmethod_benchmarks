@@ -176,10 +176,40 @@ inline void object_regions(const B* p, std::vector<region>& out) {
 //   regions   what `clflush` mode should evict
 // ---------------------------------------------------------------------------
 
+// The apparatus baseline: the timed window with nothing in it -- the start
+// bracket and the stamp, no call. `net = mean - probe` is therefore the FULL
+// arrival cost of a call, and `x net` compares whole call against whole call,
+// which is the benchmark's actual question. (Subtracting `direct` instead
+// produced ratios of excesses over a plain call -- a different question; see
+// README, "What the ratios divide".)
+struct v_probe {
+    static constexpr bool touches_receiver = false;
+    static constexpr const char* body = "-";
+    static constexpr const char* name = "probe";
+    static constexpr const char* group = "baseline";
+    static constexpr const char* hier = "main";
+    static constexpr int arity = 0;
+
+    using args = const Base*;
+
+    static auto prepare(env& e, std::size_t i, std::size_t) -> args {
+        return e.ptrs[i];
+    }
+
+    static auto call(args) -> stamp_id {
+        return {stop_stamp(), -3};
+    }
+
+    static void regions(args, std::vector<region>&) {
+    }
+};
+
 struct v_direct {
     static constexpr bool touches_receiver = false;
     static constexpr const char* body = "-";
     static constexpr const char* name = "direct";
+    // A reference point, not a subtracted baseline: what a plain call costs
+    // on the same scale.
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
     static constexpr int arity = 0;
@@ -1169,14 +1199,19 @@ auto verify(env& e) -> bool {
 void report(
     const std::vector<row>& rows, const config& cfg, double tsc_hz,
     const env& e, const stats& floor_st) {
-    // Baselines: the `ovh` row for each mode.
-    auto baseline = [&](cache_mode m) -> const stats* {
+    // The apparatus baseline: the empty window. Matched by name -- `direct`
+    // and `nvf` are baselines too, with different roles.
+    auto named_baseline = [&](cache_mode m, const char* name) -> const stats* {
         for (const auto& r : rows) {
-            if (r.group == "baseline" && r.mode == m) {
+            if (r.group == "baseline" && r.mode == m && r.name == name) {
                 return &r.st;
             }
         }
         return nullptr;
+    };
+
+    auto baseline = [&](cache_mode m) -> const stats* {
+        return named_baseline(m, "probe");
     };
 
     // Uncertainty on a difference of two independent means.
@@ -1217,7 +1252,17 @@ void report(
         // and made "dispatch alone" read ~0.96x when the honest figure is the
         // row's whole net (review finding). For them, disp IS net.
         if (!r.touches_receiver) {
-            return net_of(r, se);
+            // Subtract the DIRECT call, not the empty probe: disp is the
+            // mechanism-excess column, and the mechanism a vp row replaces is
+            // a call.
+            const auto* d = named_baseline(r.mode, "direct");
+
+            if (d == nullptr) {
+                return net_of(r, se);
+            }
+
+            se = std::sqrt(r.st.se * r.st.se + d->se * d->se);
+            return r.st.mean - d->mean;
         }
 
         const auto* b = obj_baseline(r.mode, r.arity, r.hier);
@@ -1296,8 +1341,8 @@ void report(
         "  empty timed region (noise floor): mean %.1f, median %llu cycles\n",
         floor_st.mean, (unsigned long long)floor_st.median);
     std::printf(
-        "  mean trimmed of top 5%%; net = mean - direct; disp = mean - nvf of "
-        "same arity\n");
+        "  mean trimmed of top 5%%; net = mean - probe (whole call); disp = "
+        "mechanism excess\n");
     std::printf(
         "  net still contains the cold miss on the receiver; disp is dispatch "
         "alone\n");
@@ -1513,6 +1558,7 @@ auto main_impl(int argc, char** argv) -> int {
     std::vector<row> rows;
 
     for (auto mode : modes) {
+        rows.push_back(run<v_probe>(e, cfg, mode));
         rows.push_back(run<v_direct>(e, cfg, mode));
         rows.push_back(run<v_nvf1>(e, cfg, mode));
         rows.push_back(run<v_nvf2>(e, cfg, mode));

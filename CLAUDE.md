@@ -69,8 +69,11 @@ recommended API), in the `OMB_RUN` macro, in `report.py`, and in the README tabl
 
 ### Two compensations, and they are the point
 
-- `net = mean - ovh` removes the apparatus (the `rdtsc` pair, the fences, cold code at the call
-  site).
+- `net = mean - probe` removes the apparatus only (the empty window: bracket + stamp). It is the
+  whole-call cost, and `x net` — whole call over whole call — is the headline ratio. `direct` (a
+  real call to a stamping body) is a quoted reference point, subtracted only in `disp` for rows
+  that never touch the receiver. Do not make excess-over-direct the headline: that answers "what
+  does the mechanism add", not "open method vs virtual function".
 - `disp = mean - nvf` additionally removes *reaching the receiver* — `nvf` is a non-virtual member
   call that loads the object but dispatches on nothing. Rows whose timed region never touches the
   receiver (`om vptr` with const bodies: the v-table pointer is already in the arguments) set

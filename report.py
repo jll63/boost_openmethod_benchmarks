@@ -91,15 +91,16 @@ def emit_world(data, body, passes, warm_caption, cold_caption):
     """The results-shaped table pair for one body world."""
     print(warm_caption + "\n")
     print(f"Median of {passes} passes.\n")
-    print("| dispatch | arity | disp | x vf |")
-    print("|---|---|---|---|")
+    print("| dispatch | arity | net | x vf | disp |")
+    print("|---|---|---|---|---|")
 
     for arity in (1, 2):
         for label, hier, group, disp, ar in dispatch_rows(arity):
             k = ("warm", hier, body, group, disp, ar)
             print(f"| `{label_for(label, group, ar)}` | {ar} | "
-                  f"{cycles(med(data, k, 'disp'))} | "
-                  f"{med(data, k, 'x_disp'):.2f}x |")
+                  f"{cycles(med(data, k, 'net'))} | "
+                  f"{med(data, k, 'x_net'):.2f}x | "
+                  f"{cycles(med(data, k, 'disp'))} |")
 
     print("\n" + cold_caption + "\n")
     print(f"Median of {passes} passes.\n")
@@ -138,15 +139,19 @@ def section_results(data, passes):
           f"hierarchy's own `vf`, which measures within a cycle of the main "
           f"one.\n")
     print(f"Median of {passes} passes.\n")
-    print("| dispatch | arity | disp | x vf |")
-    print("|---|---|---|---|")
+    direct = med(data, ("warm", "main", "-", "baseline", "direct", 0), "net")
+    print(f"For scale: a direct call to a stamping body measures "
+          f"{direct:.1f} cycles net here.\n")
+    print("| dispatch | arity | net | x vf | disp |")
+    print("|---|---|---|---|---|")
 
     for arity in (1, 2):
         for label, hier, group, disp, ar in dispatch_rows(arity):
             k = ("warm", hier, "const", group, disp, ar)
             print(f"| `{label_for(label, group, ar)}` | {ar} | "
-                  f"{cycles(med(data, k, 'disp'))} | "
-                  f"{med(data, k, 'x_disp'):.2f}x |")
+                  f"{cycles(med(data, k, 'net'))} | "
+                  f"{med(data, k, 'x_net'):.2f}x | "
+                  f"{cycles(med(data, k, 'disp'))} |")
 
     nvf = med(data, ("clflush", "main", "-", "baseline", "nvf", 1), "net")
     vfn = med(data, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
@@ -157,8 +162,9 @@ def section_results(data, passes):
           f"direct call, "
           f"against {vfn:.0f} for the whole `vf`\nyardstick. So "
           f"{nvf / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
-          f"object rather than\ndispatching on it — which is exactly what the "
-          f"`disp` column removes.\n")
+          f"object rather than\ndispatching on it. `x net` compares whole call "
+          f"with whole call — the headline;\n`disp` and `x disp` are the "
+          f"mechanism-excess diagnostics.\n")
     print(f"Median of {passes} passes.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")
     print("|---|---|---|---|---|---|")
@@ -232,9 +238,9 @@ def section_matrix(loaded, passes):
                         sys.exit(f"results incomplete: no rows for {k} in "
                                  f"{name} -- interrupted matrix.sh pass? "
                                  "Re-run ./matrix.sh.")
-                    ratios = [float(r["x_disp"]) for r in d[k]]
+                    ratios = [float(r["x_net"]) for r in d[k]]
                     ratio = statistics.median(ratios)
-                    cells.append(f"{ratio:.2f}x ({cycles(med(d, k, 'disp'))})")
+                    cells.append(f"{ratio:.2f}x ({cycles(med(d, k, 'net'))})")
 
                     if len(ratios) > 2 and ratio > 0:
                         spreads.append(
