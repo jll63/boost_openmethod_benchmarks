@@ -123,9 +123,10 @@ Two designs removed the problem in sequence. First, both brackets captured raw
 identical across every variant within a compiler. Then the closing bracket was
 abolished altogether — the stop moved into the measured bodies, which is the
 harness's own code, emitted identically everywhere. What survives of the
-original issue is the start side: `tsc_start` captures the raw pair, and gcc
-happens to assemble it inside the window — identically in every variant, so it
-cancels against the baseline.
+original issue is the start side: `tsc_start` captures the raw pair, and the
+compiler schedules its assembly as it pleases — believed at the time to be
+variant-identical and cancelling; the post-rewrite verification episode below
+later showed it is neither, merely bounded and sub-cycle.
 
 ## From excess to whole call (`3789262`)
 
