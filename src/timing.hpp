@@ -78,6 +78,32 @@ inline auto tsc_stop() -> tsc_reading {
     return {lo, hi};
 }
 
+// The stop that lives in the measured BODY. rdtscp waits until every prior
+// instruction -- the entire dispatch chain, and in the use world the receiver
+// load the memory clobber keeps above it -- has executed, so the value is the
+// arrival time in the overrider. No trailing lfence: everything after this
+// point (assembling the stamp, the return) is outside the window by
+// construction, which is the whole idea. See README, "The timed window".
+inline auto stop_stamp() -> std::uint64_t {
+    std::uint32_t lo, hi;
+    asm volatile("rdtscp" : "=a"(lo), "=d"(hi) : : "ecx", "memory");
+    return (static_cast<std::uint64_t>(hi) << 32) | lo;
+}
+
+// What every measured body returns: the arrival stamp, plus an id computed
+// after the stamp that carries the verify oracle's value -- dispatch
+// correctness stays checkable even though the bodies no longer compute
+// arithmetic results.
+struct stamp_id {
+    std::uint64_t t;
+    std::int32_t id;
+};
+
+inline auto elapsed_to(tsc_reading start, std::uint64_t stop)
+    -> std::uint64_t {
+    return stop - ((static_cast<std::uint64_t>(start.hi) << 32) | start.lo);
+}
+
 inline auto elapsed(tsc_reading start, tsc_reading stop) -> std::uint64_t {
     auto t0 = (static_cast<std::uint64_t>(start.hi) << 32) | start.lo;
     auto t1 = (static_cast<std::uint64_t>(stop.hi) << 32) | stop.lo;

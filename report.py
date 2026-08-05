@@ -126,12 +126,13 @@ def label_for(label, group, arity, suffix=""):
 
 
 def section_results(data, passes):
-    ovh = med(data, ("warm", "main", "-", "baseline", "ovh", 0), "mean")
+    ovh = med(data, ("warm", "main", "-", "baseline", "direct", 0), "mean")
     nvf = med(data, ("warm", "main", "-", "baseline", "nvf", 1), "mean")
 
     print("### Warm caches — the sharpest numbers\n")
     print(f"Nothing is evicted, so reaching the receiver is almost free: the "
-          f"`nvf` baseline\ncosts {nvf - ovh:.1f} cycles more than `ovh`. "
+          f"`nvf` baseline\ncosts {nvf - ovh:.1f} cycles more than the "
+          f"direct-call baseline. "
           f"`net` and `disp` therefore agree, and both are\nstable to ~1 cycle "
           f"run to run. The `inplace` rows are ratioed against the inplace\n"
           f"hierarchy's own `vf`, which measures within a cycle of the main "
@@ -152,7 +153,8 @@ def section_results(data, passes):
 
     print("\n### Caches cold (`clflush`)\n")
     print(f"Flushed, the first touch of the receiver is a cache miss in its own "
-          f"right: the\n`nvf` baseline costs {nvf:.0f} cycles more than `ovh`, "
+          f"right: the\n`nvf` baseline costs {nvf:.0f} cycles more than the "
+          f"direct call, "
           f"against {vfn:.0f} for the whole `vf`\nyardstick. So "
           f"{nvf / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
           f"object rather than\ndispatching on it — which is exactly what the "

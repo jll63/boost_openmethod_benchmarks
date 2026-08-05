@@ -141,6 +141,14 @@ struct env {
     std::uniform_int_distribution<std::size_t> pick;
 };
 
+// The apparatus baseline: a direct (non-virtual, non-inlined) call to a body
+// that stamps on arrival. `net = mean - direct` therefore reads as "what the
+// dispatch mechanism adds over a direct call" -- a meaningful quantity, where
+// the old empty-bracket `ovh` was apparatus only.
+__attribute__((noinline)) auto direct_probe() -> stamp_id {
+    return {stop_stamp(), -2};
+}
+
 // Flush an object and the C++ v-table it points to.
 //
 // The v-table region starts 16 bytes BEFORE the address point: offset-to-top
@@ -168,10 +176,10 @@ inline void object_regions(const B* p, std::vector<region>& out) {
 //   regions   what `clflush` mode should evict
 // ---------------------------------------------------------------------------
 
-struct v_ovh {
+struct v_direct {
     static constexpr bool touches_receiver = false;
     static constexpr const char* body = "-";
-    static constexpr const char* name = "ovh";
+    static constexpr const char* name = "direct";
     static constexpr const char* group = "baseline";
     static constexpr const char* hier = "main";
     static constexpr int arity = 0;
@@ -182,10 +190,10 @@ struct v_ovh {
         return e.ptrs[i];
     }
 
-    // No dispatch: measures the rdtsc pair plus reaching the call site with
-    // cold code. Subtracting it from the others isolates the dispatch.
-    static auto call(args, int x) -> int {
-        return x;
+    // No dispatch: the start bracket, a direct call, and the stamp on
+    // arrival. Subtracting it isolates what a dispatch mechanism adds.
+    static auto call(args) -> stamp_id {
+        return direct_probe();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -211,8 +219,8 @@ struct v_nvf1 {
         return e.ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return a->nvf(x);
+    static auto call(args a) -> stamp_id {
+        return a->nvf();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -234,8 +242,8 @@ struct v_vf1 {
         return e.ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return a->vf(x);
+    static auto call(args a) -> stamp_id {
+        return a->vf();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -262,9 +270,13 @@ struct v_nvf2 {
         return {e.ptrs[i], e.ptrs[j]};
     }
 
-    // Touches both receivers, as every arity-2 dispatch does.
-    static auto call(args p, int x) -> int {
-        return p.a->nvf(x) + p.b->nvf(0);
+    // Touches both receivers, as every arity-2 dispatch does: a direct read
+    // of `a`, then the stamping non-virtual call on `b`.
+    static auto call(args p) -> stamp_id {
+        auto ta = p.a->tag;
+        auto r = p.b->nvf();
+        r.id += ta;
+        return r;
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -287,10 +299,10 @@ struct v_vf2 {
         return {e.ptrs[i], e.ptrs[j]};
     }
 
-    // The double dispatch idiom: dd() dispatches on a, then calls dd_with() on
-    // b, which dispatches again. Two chained virtual calls.
-    static auto call(args p, int x) -> int {
-        return p.a->dd(*p.b, x);
+    // The double dispatch idiom: dd() dispatches on a, then calls dd_with()
+    // on b, which dispatches again and stamps. Two chained virtual calls.
+    static auto call(args p) -> stamp_id {
+        return p.a->dd(*p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -347,8 +359,8 @@ struct v_om_ref1 {
         return e.ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return poke_ref<R>::fn(*a, x);
+    static auto call(args a) -> stamp_id {
+        return poke_ref<R>::fn(*a);
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -373,8 +385,8 @@ struct v_om_vp1 {
         return vp_traits<R>::array(e)[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return poke_vp<R>::fn(a, x);
+    static auto call(args a) -> stamp_id {
+        return poke_vp<R>::fn(a);
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -399,8 +411,8 @@ struct v_om_ref2 {
         return {e.ptrs[i], e.ptrs[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return collide_ref<R>::fn(*p.a, *p.b, x);
+    static auto call(args p) -> stamp_id {
+        return collide_ref<R>::fn(*p.a, *p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -432,8 +444,8 @@ struct v_om_vp2 {
         return {vp_traits<R>::array(e)[i], vp_traits<R>::array(e)[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return collide_vp<R>::fn(p.a, p.b, x);
+    static auto call(args p) -> stamp_id {
+        return collide_vp<R>::fn(p.a, p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -490,8 +502,8 @@ struct v_ip_nvf1 {
         return ip_traits<R>::pop(e).ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return a->nvf(x);
+    static auto call(args a) -> stamp_id {
+        return a->nvf();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -515,8 +527,11 @@ struct v_ip_nvf2 {
         return {p[i], p[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return p.a->nvf(x) + p.b->nvf(0);
+    static auto call(args p) -> stamp_id {
+        auto ta = p.a->tag;
+        auto r = p.b->nvf();
+        r.id += ta;
+        return r;
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -540,8 +555,8 @@ struct v_ip_vf1 {
         return ip_traits<R>::pop(e).ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return a->vf(x);
+    static auto call(args a) -> stamp_id {
+        return a->vf();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -565,8 +580,8 @@ struct v_ip_vf2 {
         return {p[i], p[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return p.a->dd(*p.b, x);
+    static auto call(args p) -> stamp_id {
+        return p.a->dd(*p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -590,8 +605,8 @@ struct v_ip_ref1 {
         return ip_traits<R>::pop(e).ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return ipoke_ref<R>::fn(*a, x);
+    static auto call(args a) -> stamp_id {
+        return ipoke_ref<R>::fn(*a);
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -617,8 +632,8 @@ struct v_ip_ref2 {
         return {p[i], p[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return icollide_ref<R>::fn(*p.a, *p.b, x);
+    static auto call(args p) -> stamp_id {
+        return icollide_ref<R>::fn(*p.a, *p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -649,8 +664,8 @@ struct v_vfu1 {
         return e.ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return a->vfu(x);
+    static auto call(args a) -> stamp_id {
+        return a->vfu();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -672,8 +687,8 @@ struct v_vfu2 {
         return {e.ptrs[i], e.ptrs[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return p.a->ddu(*p.b, x);
+    static auto call(args p) -> stamp_id {
+        return p.a->ddu(*p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -697,8 +712,8 @@ struct v_om_refu1 {
         return e.ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return pokeu_ref<R>::fn(*a, x);
+    static auto call(args a) -> stamp_id {
+        return pokeu_ref<R>::fn(*a);
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -723,8 +738,8 @@ struct v_om_vpu1 {
         return vp_traits<R>::array(e)[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return pokeu_vp<R>::fn(a, x);
+    static auto call(args a) -> stamp_id {
+        return pokeu_vp<R>::fn(a);
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -749,8 +764,8 @@ struct v_om_refu2 {
         return {e.ptrs[i], e.ptrs[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return collideu_ref<R>::fn(*p.a, *p.b, x);
+    static auto call(args p) -> stamp_id {
+        return collideu_ref<R>::fn(*p.a, *p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -776,8 +791,8 @@ struct v_om_vpu2 {
         return {vp_traits<R>::array(e)[i], vp_traits<R>::array(e)[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return collideu_vp<R>::fn(p.a, p.b, x);
+    static auto call(args p) -> stamp_id {
+        return collideu_vp<R>::fn(p.a, p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -803,8 +818,8 @@ struct v_ip_vfu1 {
         return ip_traits<R>::pop(e).ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return a->vfu(x);
+    static auto call(args a) -> stamp_id {
+        return a->vfu();
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -828,8 +843,8 @@ struct v_ip_vfu2 {
         return {p[i], p[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return p.a->ddu(*p.b, x);
+    static auto call(args p) -> stamp_id {
+        return p.a->ddu(*p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -853,8 +868,8 @@ struct v_ip_refu1 {
         return ip_traits<R>::pop(e).ptrs[i];
     }
 
-    static auto call(args a, int x) -> int {
-        return ipokeu_ref<R>::fn(*a, x);
+    static auto call(args a) -> stamp_id {
+        return ipokeu_ref<R>::fn(*a);
     }
 
     static void regions(args a, std::vector<region>& out) {
@@ -880,8 +895,8 @@ struct v_ip_refu2 {
         return {p[i], p[j]};
     }
 
-    static auto call(args p, int x) -> int {
-        return icollideu_ref<R>::fn(*p.a, *p.b, x);
+    static auto call(args p) -> stamp_id {
+        return icollideu_ref<R>::fn(*p.a, *p.b);
     }
 
     static void regions(args p, std::vector<region>& out) {
@@ -899,14 +914,17 @@ struct v_ip_refu2 {
 // The rdtsc brackets live *inside* this function, so the call and the prologue
 // are not timed, while the arguments still arrive through the ABI and cannot be
 // constant-folded or devirtualized by the optimizer.
+// The start bracket is here; the stop is IN the body, which returns it. The
+// window therefore ends at arrival in the overrider: no return path, no stop
+// bracket, nothing compiler-scheduled at the closing edge. The elapsed
+// computation is a data dependency on the return value, after the window.
 template<class V>
 __attribute__((noinline)) auto
-timed_call(typename V::args a, int x, std::uint64_t& cycles) -> int {
+timed_call(typename V::args a, std::uint64_t& cycles) -> int {
     auto t0 = tsc_start();
-    auto r = V::call(a, x);
-    auto t1 = tsc_stop();
-    cycles = elapsed(t0, t1);
-    return r;
+    auto r = V::call(a);
+    cycles = elapsed_to(t0, r.t);
+    return r.id;
 }
 
 struct row {
@@ -938,19 +956,18 @@ auto run(env& e, const config& cfg, cache_mode mode) -> row {
         auto i = e.draw();
         auto j = e.draw();
         auto a = V::prepare(e, i, j);
-        auto x = static_cast<int>(rep & 0xff);
 
         // Warm everything, so `warm` mode measures a hot cache and the cold
         // modes measure eviction rather than first-touch page faults.
         std::uint64_t discard;
-        consume(timed_call<V>(a, x, discard));
+        consume(timed_call<V>(a, discard));
 
         regs.clear();
         V::regions(a, regs);
         e.scrub.apply(mode, regs.data(), regs.size());
 
         std::uint64_t cycles;
-        auto r = timed_call<V>(a, x, cycles);
+        auto r = timed_call<V>(a, cycles);
         consume(r);
 
         samples.push_back(cycles);
@@ -967,28 +984,29 @@ auto run(env& e, const config& cfg, cache_mode mode) -> row {
 // Every dispatch path must reach the same overrider. A registry wired to the
 // wrong method, or an overrider that failed to register, would otherwise
 // produce a plausible but meaningless table.
+struct check_t {
+    const char* what;
+    int got;
+    int want;
+};
+
 auto verify(env& e) -> bool {
     bool ok = true;
-    const int x = 7;
 
+    // Oracles from the class contracts alone, carried in stamp_id::id:
+    //   arity 1 (both worlds): a.tag
+    //   arity 2, const: same leaf -> tag, else -1
+    //   arity 2, use:   same leaf -> a.tag + b.tag, else -(a.tag + b.tag) - 1
+    //   dd: b.tag        ddu: a.tag + b.tag        vf/vfu: tag
     for (std::size_t i = 0; i < e.ptrs.size(); i += 97) {
         for (std::size_t j = 0; j < e.ptrs.size(); j += 89) {
             const auto* a = e.ptrs[i];
             const auto* b = e.ptrs[j];
 
-            // Independent oracles, from the class contracts alone. The old
-            // expectation for arity 2 was collide_ref<vector_registry> -- one
-            // of the paths under test -- so every registry being wrong the
-            // same way (an unregistered overrider pack, say) passed unseen
-            // (review finding). vf(x) contracts to x + tag; the diagonal
-            // overrider fires iff both receivers are the same leaf; dd
-            // dispatches on `a`, then dd_with on `b`, so it returns x + b.tag.
-            auto want1 = x + a->tag;
-            auto want2 = (a->tag == b->tag) ? x + a->tag : x;
-
-            // Use-world contracts: every body reads every receiver.
-            auto wantu2 = (a->tag == b->tag) ? x + a->tag + b->tag
-                                             : x - a->tag - b->tag;
+            auto want1 = a->tag;
+            auto want2 = (a->tag == b->tag) ? a->tag : -1;
+            auto wantu2 = (a->tag == b->tag) ? a->tag + b->tag
+                                             : -a->tag - b->tag - 1;
 
             struct check {
                 const char* what;
@@ -997,64 +1015,65 @@ auto verify(env& e) -> bool {
             };
 
             const check checks[] = {
-                {"vf yardstick", a->vf(x), want1},
-                {"dd yardstick", a->dd(*b, x), x + b->tag},
-                {"vfu yardstick", a->vfu(x), want1},
-                {"ddu yardstick", a->ddu(*b, x), x + a->tag + b->tag},
-                {"vec refu1", pokeu_ref<vector_registry>::fn(*a, x), want1},
-                {"vec vpu1", pokeu_vp<vector_registry>::fn(e.vp_vec[i], x),
+                {"vf yardstick", a->vf().id, want1},
+                {"vfu yardstick", a->vfu().id, want1},
+                {"dd yardstick", a->dd(*b).id, b->tag},
+                {"ddu yardstick", a->ddu(*b).id, a->tag + b->tag},
+                {"nvf baseline", a->nvf().id, want1},
+                {"vec ref1", poke_ref<vector_registry>::fn(*a).id, want1},
+                {"map ref1", poke_ref<map_registry>::fn(*a).id, want1},
+                {"flat ref1", poke_ref<flat_registry>::fn(*a).id, want1},
+                {"ind ref1", poke_ref<indirect_registry>::fn(*a).id, want1},
+                {"vec vp1", poke_vp<vector_registry>::fn(e.vp_vec[i]).id,
                  want1},
-                {"map refu1", pokeu_ref<map_registry>::fn(*a, x), want1},
-                {"flat refu1", pokeu_ref<flat_registry>::fn(*a, x), want1},
-                {"ind refu1", pokeu_ref<indirect_registry>::fn(*a, x), want1},
-                {"ind vpu1", pokeu_vp<indirect_registry>::fn(e.vp_ind[i], x),
+                {"map vp1", poke_vp<map_registry>::fn(e.vp_map[i]).id, want1},
+                {"flat vp1", poke_vp<flat_registry>::fn(e.vp_flat[i]).id,
                  want1},
-                {"vec refu2", collideu_ref<vector_registry>::fn(*a, *b, x),
-                 wantu2},
-                {"vec vpu2",
-                 collideu_vp<vector_registry>::fn(e.vp_vec[i], e.vp_vec[j], x),
-                 wantu2},
-                {"map refu2", collideu_ref<map_registry>::fn(*a, *b, x),
-                 wantu2},
-                {"flat refu2", collideu_ref<flat_registry>::fn(*a, *b, x),
-                 wantu2},
-                {"ind refu2", collideu_ref<indirect_registry>::fn(*a, *b, x),
-                 wantu2},
-                {"ind vpu2",
-                 collideu_vp<indirect_registry>::fn(
-                     e.vp_ind[i], e.vp_ind[j], x),
-                 wantu2},
-                {"vec ref2", collide_ref<vector_registry>::fn(*a, *b, x),
+                {"ind vp1", poke_vp<indirect_registry>::fn(e.vp_ind[i]).id,
+                 want1},
+                {"vec ref2", collide_ref<vector_registry>::fn(*a, *b).id,
                  want2},
-                {"nvf", a->nvf(x), want1},
-                {"vec ref1", poke_ref<vector_registry>::fn(*a, x), want1},
-                {"map ref1", poke_ref<map_registry>::fn(*a, x), want1},
-                {"flat ref1", poke_ref<flat_registry>::fn(*a, x), want1},
-                {"vec vp1", poke_vp<vector_registry>::fn(e.vp_vec[i], x),
-                 want1},
-                {"map vp1", poke_vp<map_registry>::fn(e.vp_map[i], x), want1},
-                {"flat vp1", poke_vp<flat_registry>::fn(e.vp_flat[i], x),
-                 want1},
-                {"ind ref1", poke_ref<indirect_registry>::fn(*a, x), want1},
-                {"ind vp1", poke_vp<indirect_registry>::fn(e.vp_ind[i], x),
-                 want1},
-                {"ind ref2",
-                 collide_ref<indirect_registry>::fn(*a, *b, x), want2},
-                {"ind vp2",
-                 collide_vp<indirect_registry>::fn(e.vp_ind[i], e.vp_ind[j], x),
+                {"map ref2", collide_ref<map_registry>::fn(*a, *b).id, want2},
+                {"flat ref2", collide_ref<flat_registry>::fn(*a, *b).id,
                  want2},
-                {"map ref2", collide_ref<map_registry>::fn(*a, *b, x), want2},
-                {"flat ref2", collide_ref<flat_registry>::fn(*a, *b, x),
+                {"ind ref2", collide_ref<indirect_registry>::fn(*a, *b).id,
                  want2},
                 {"vec vp2",
-                 collide_vp<vector_registry>::fn(e.vp_vec[i], e.vp_vec[j], x),
+                 collide_vp<vector_registry>::fn(e.vp_vec[i], e.vp_vec[j]).id,
                  want2},
                 {"map vp2",
-                 collide_vp<map_registry>::fn(e.vp_map[i], e.vp_map[j], x),
+                 collide_vp<map_registry>::fn(e.vp_map[i], e.vp_map[j]).id,
                  want2},
                 {"flat vp2",
-                 collide_vp<flat_registry>::fn(e.vp_flat[i], e.vp_flat[j], x),
+                 collide_vp<flat_registry>::fn(e.vp_flat[i], e.vp_flat[j]).id,
                  want2},
+                {"ind vp2",
+                 collide_vp<indirect_registry>::fn(e.vp_ind[i], e.vp_ind[j])
+                     .id,
+                 want2},
+                {"vec refu1", pokeu_ref<vector_registry>::fn(*a).id, want1},
+                {"map refu1", pokeu_ref<map_registry>::fn(*a).id, want1},
+                {"flat refu1", pokeu_ref<flat_registry>::fn(*a).id, want1},
+                {"ind refu1", pokeu_ref<indirect_registry>::fn(*a).id, want1},
+                {"vec vpu1", pokeu_vp<vector_registry>::fn(e.vp_vec[i]).id,
+                 want1},
+                {"ind vpu1", pokeu_vp<indirect_registry>::fn(e.vp_ind[i]).id,
+                 want1},
+                {"vec refu2", collideu_ref<vector_registry>::fn(*a, *b).id,
+                 wantu2},
+                {"map refu2", collideu_ref<map_registry>::fn(*a, *b).id,
+                 wantu2},
+                {"flat refu2", collideu_ref<flat_registry>::fn(*a, *b).id,
+                 wantu2},
+                {"ind refu2", collideu_ref<indirect_registry>::fn(*a, *b).id,
+                 wantu2},
+                {"vec vpu2",
+                 collideu_vp<vector_registry>::fn(e.vp_vec[i], e.vp_vec[j]).id,
+                 wantu2},
+                {"ind vpu2",
+                 collideu_vp<indirect_registry>::fn(e.vp_ind[i], e.vp_ind[j])
+                     .id,
+                 wantu2},
             };
 
             for (const auto& c : checks) {
@@ -1068,119 +1087,75 @@ auto verify(env& e) -> bool {
         }
     }
 
-    // The inplace hierarchies have their own objects, so they need their own
-    // expectation: the virtual function on the same receiver.
-    auto check_inplace = [&](auto& pop, auto ref1, auto ref2,
-                             const char* what) {
+    // The inplace hierarchies, same oracles.
+    auto check_ip = [&](auto& pop, auto ref1, auto ref2, auto refu1,
+                        auto refu2, const char* what) {
         for (std::size_t i = 0; i < pop.ptrs.size(); i += 97) {
             for (std::size_t j = 0; j < pop.ptrs.size(); j += 89) {
                 const auto* a = pop.ptrs[i];
                 const auto* b = pop.ptrs[j];
 
-                auto got1 = ref1(*a, x);
-                auto want1 = x + a->tag;
+                auto want2 = (a->tag == b->tag) ? a->tag : -1;
+                auto wantu2 = (a->tag == b->tag) ? a->tag + b->tag
+                                                 : -a->tag - b->tag - 1;
 
-                if (a->vf(x) != want1) {
-                    std::printf(
-                        "MISMATCH %s vf at %zu: got %d, want %d\n", what, i,
-                        a->vf(x), want1);
-                    ok = false;
-                }
+                const check_t checks[] = {
+                    {"vf", a->vf().id, a->tag},
+                    {"vfu", a->vfu().id, a->tag},
+                    {"dd", a->dd(*b).id, b->tag},
+                    {"ddu", a->ddu(*b).id, a->tag + b->tag},
+                    {"nvf", a->nvf().id, a->tag},
+                    {"ref1", ref1(*a), a->tag},
+                    {"ref2", ref2(*a, *b), want2},
+                    {"refu1", refu1(*a), a->tag},
+                    {"refu2", refu2(*a, *b), wantu2},
+                };
 
-                if (got1 != want1) {
-                    std::printf(
-                        "MISMATCH %s ref1 at %zu: got %d, want %d\n", what, i,
-                        got1, want1);
-                    ok = false;
-                }
-
-                // Same rule as the main hierarchy: the diagonal overrider fires
-                // when both receivers are the same leaf, otherwise the
-                // (Base, Base) catch-all returns x unchanged.
-                auto want2 = (a->tag == b->tag) ? x + a->tag : x;
-                auto got2 = ref2(*a, *b, x);
-
-                if (got2 != want2) {
-                    std::printf(
-                        "MISMATCH %s ref2 at (%zu,%zu): got %d, want %d\n",
-                        what, i, j, got2, want2);
-                    ok = false;
+                for (const auto& c : checks) {
+                    if (c.got != c.want) {
+                        std::printf(
+                            "MISMATCH %s %s at (%zu,%zu): got %d, want %d\n",
+                            what, c.what, i, j, c.got, c.want);
+                        ok = false;
+                    }
                 }
             }
         }
     };
 
-    auto check_inplace_use = [&](auto& pop, auto refu1, auto refu2,
-                                 const char* what) {
-        for (std::size_t i = 0; i < pop.ptrs.size(); i += 97) {
-            for (std::size_t j = 0; j < pop.ptrs.size(); j += 89) {
-                const auto* a = pop.ptrs[i];
-                const auto* b = pop.ptrs[j];
-
-                auto got1 = refu1(*a, x);
-
-                if (got1 != x + a->tag) {
-                    std::printf(
-                        "MISMATCH %s refu1 at %zu: got %d, want %d\n", what,
-                        i, got1, x + a->tag);
-                    ok = false;
-                }
-
-                auto wantu2 = (a->tag == b->tag) ? x + a->tag + b->tag
-                                                 : x - a->tag - b->tag;
-                auto got2 = refu2(*a, *b, x);
-
-                if (got2 != wantu2) {
-                    std::printf(
-                        "MISMATCH %s refu2 at (%zu,%zu): got %d, want %d\n",
-                        what, i, j, got2, wantu2);
-                    ok = false;
-                }
-            }
-        }
-    };
-
-    check_inplace_use(
+    check_ip(
         e.ip_direct,
-        [](const IBase<inplace_registry>& o, int v) {
-            return ipokeu_ref<inplace_registry>::fn(o, v);
+        [](const IBase<inplace_registry>& o) {
+            return ipoke_ref<inplace_registry>::fn(o).id;
         },
         [](const IBase<inplace_registry>& o1,
-           const IBase<inplace_registry>& o2, int v) {
-            return icollideu_ref<inplace_registry>::fn(o1, o2, v);
+           const IBase<inplace_registry>& o2) {
+            return icollide_ref<inplace_registry>::fn(o1, o2).id;
         },
-        "inplace-use");
-
-    check_inplace_use(
-        e.ip_indirect,
-        [](const IBase<inplace_indirect_registry>& o, int v) {
-            return ipokeu_ref<inplace_indirect_registry>::fn(o, v);
-        },
-        [](const IBase<inplace_indirect_registry>& o1,
-           const IBase<inplace_indirect_registry>& o2, int v) {
-            return icollideu_ref<inplace_indirect_registry>::fn(o1, o2, v);
-        },
-        "inplace_ind-use");
-
-    check_inplace(
-        e.ip_direct,
-        [](const IBase<inplace_registry>& o, int v) {
-            return ipoke_ref<inplace_registry>::fn(o, v);
+        [](const IBase<inplace_registry>& o) {
+            return ipokeu_ref<inplace_registry>::fn(o).id;
         },
         [](const IBase<inplace_registry>& o1,
-           const IBase<inplace_registry>& o2, int v) {
-            return icollide_ref<inplace_registry>::fn(o1, o2, v);
+           const IBase<inplace_registry>& o2) {
+            return icollideu_ref<inplace_registry>::fn(o1, o2).id;
         },
         "inplace");
 
-    check_inplace(
+    check_ip(
         e.ip_indirect,
-        [](const IBase<inplace_indirect_registry>& o, int v) {
-            return ipoke_ref<inplace_indirect_registry>::fn(o, v);
+        [](const IBase<inplace_indirect_registry>& o) {
+            return ipoke_ref<inplace_indirect_registry>::fn(o).id;
         },
         [](const IBase<inplace_indirect_registry>& o1,
-           const IBase<inplace_indirect_registry>& o2, int v) {
-            return icollide_ref<inplace_indirect_registry>::fn(o1, o2, v);
+           const IBase<inplace_indirect_registry>& o2) {
+            return icollide_ref<inplace_indirect_registry>::fn(o1, o2).id;
+        },
+        [](const IBase<inplace_indirect_registry>& o) {
+            return ipokeu_ref<inplace_indirect_registry>::fn(o).id;
+        },
+        [](const IBase<inplace_indirect_registry>& o1,
+           const IBase<inplace_indirect_registry>& o2) {
+            return icollideu_ref<inplace_indirect_registry>::fn(o1, o2).id;
         },
         "inplace_ind");
 
@@ -1321,7 +1296,7 @@ void report(
         "  empty timed region (noise floor): mean %.1f, median %llu cycles\n",
         floor_st.mean, (unsigned long long)floor_st.median);
     std::printf(
-        "  mean trimmed of top 5%%; net = mean - ovh; disp = mean - nvf of "
+        "  mean trimmed of top 5%%; net = mean - direct; disp = mean - nvf of "
         "same arity\n");
     std::printf(
         "  net still contains the cold miss on the receiver; disp is dispatch "
@@ -1538,7 +1513,7 @@ auto main_impl(int argc, char** argv) -> int {
     std::vector<row> rows;
 
     for (auto mode : modes) {
-        rows.push_back(run<v_ovh>(e, cfg, mode));
+        rows.push_back(run<v_direct>(e, cfg, mode));
         rows.push_back(run<v_nvf1>(e, cfg, mode));
         rows.push_back(run<v_nvf2>(e, cfg, mode));
         rows.push_back(run<v_vf1>(e, cfg, mode));

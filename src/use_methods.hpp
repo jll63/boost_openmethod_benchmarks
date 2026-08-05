@@ -22,11 +22,11 @@
 // across a mispredicted indirect call. That is not derivable; it is why these
 // methods exist. See README, "Two fair comparisons".
 //
-// Contracts (the verify oracles):
-//   pokeu:    x + a.tag
-//   collideu: same leaf -> x + a.tag + b.tag, else -> x - a.tag - b.tag
-//             (distinct values, so verify can tell which overrider ran; both
-//             read both receivers)
+// Contracts (the verify oracles, carried in stamp_id::id):
+//   pokeu:    a.tag
+//   collideu: same leaf -> a.tag + b.tag, else -> -a.tag - b.tag - 1
+//             (distinct for every pair, so verify can tell which overrider
+//             ran; both read both receivers)
 
 #include "registries.hpp"
 
@@ -41,21 +41,21 @@ struct icollideu_ref_id;
 
 template<class R>
 using pokeu_ref =
-    om::method<pokeu_ref_id, int(om::virtual_<const Base&>, int), R>;
+    om::method<pokeu_ref_id, stamp_id(om::virtual_<const Base&>), R>;
 
 template<class R>
 using pokeu_vp =
-    om::method<pokeu_vp_id, int(om::virtual_ptr<const Base, R>, int), R>;
+    om::method<pokeu_vp_id, stamp_id(om::virtual_ptr<const Base, R>), R>;
 
 template<class R>
 using collideu_ref = om::method<
     collideu_ref_id,
-    int(om::virtual_<const Base&>, om::virtual_<const Base&>, int), R>;
+    stamp_id(om::virtual_<const Base&>, om::virtual_<const Base&>), R>;
 
 template<class R>
 using collideu_vp = om::method<
     collideu_vp_id,
-    int(om::virtual_ptr<const Base, R>, om::virtual_ptr<const Base, R>, int),
+    stamp_id(om::virtual_ptr<const Base, R>, om::virtual_ptr<const Base, R>),
     R>;
 
 // ---------------------------------------------------------------------------
@@ -66,38 +66,43 @@ using collideu_vp = om::method<
 // ---------------------------------------------------------------------------
 
 template<class R, std::size_t I>
-auto pokeu_ref_impl(const Derived<I>& self, int x) -> int {
-    return x + self.tag;
+auto pokeu_ref_impl(const Derived<I>& self) -> stamp_id {
+    auto t = self.tag; // the use-world receiver read, above the stamp
+    return {stop_stamp(), t};
 }
 
 template<class R, std::size_t I>
-auto pokeu_vp_impl(om::virtual_ptr<const Derived<I>, R> self, int x) -> int {
-    return x + self->tag;
+auto pokeu_vp_impl(om::virtual_ptr<const Derived<I>, R> self) -> stamp_id {
+    auto t = self->tag; // deferred receiver read: the overlap under test
+    return {stop_stamp(), t};
 }
 
 template<class R>
-auto collideu_ref_base(const Base& a, const Base& b, int x) -> int {
-    return x - a.tag - b.tag;
+auto collideu_ref_base(const Base& a, const Base& b) -> stamp_id {
+    auto t = -a.tag - b.tag - 1;
+    return {stop_stamp(), t};
 }
 
 template<class R, std::size_t I>
-auto collideu_ref_impl(const Derived<I>& a, const Derived<I>& b, int x)
-    -> int {
-    return x + a.tag + b.tag;
+auto collideu_ref_impl(const Derived<I>& a, const Derived<I>& b) -> stamp_id {
+    auto t = a.tag + b.tag;
+    return {stop_stamp(), t};
 }
 
 template<class R>
 auto collideu_vp_base(
-    om::virtual_ptr<const Base, R> a, om::virtual_ptr<const Base, R> b, int x)
-    -> int {
-    return x - a->tag - b->tag;
+    om::virtual_ptr<const Base, R> a, om::virtual_ptr<const Base, R> b)
+    -> stamp_id {
+    auto t = -a->tag - b->tag - 1;
+    return {stop_stamp(), t};
 }
 
 template<class R, std::size_t I>
 auto collideu_vp_impl(
     om::virtual_ptr<const Derived<I>, R> a,
-    om::virtual_ptr<const Derived<I>, R> b, int x) -> int {
-    return x + a->tag + b->tag;
+    om::virtual_ptr<const Derived<I>, R> b) -> stamp_id {
+    auto t = a->tag + b->tag;
+    return {stop_stamp(), t};
 }
 
 template<class R, std::size_t... I>
@@ -141,27 +146,30 @@ OMB_REGISTER_USE(indirect_registry);
 
 template<class R>
 using ipokeu_ref =
-    om::method<ipokeu_ref_id, int(om::virtual_<const IBase<R>&>, int), R>;
+    om::method<ipokeu_ref_id, stamp_id(om::virtual_<const IBase<R>&>), R>;
 
 template<class R>
 using icollideu_ref = om::method<
     icollideu_ref_id,
-    int(om::virtual_<const IBase<R>&>, om::virtual_<const IBase<R>&>, int), R>;
+    stamp_id(om::virtual_<const IBase<R>&>, om::virtual_<const IBase<R>&>), R>;
 
 template<class R, std::size_t I>
-auto ipokeu_ref_impl(const IDerived<R, I>& self, int x) -> int {
-    return x + self.tag;
+auto ipokeu_ref_impl(const IDerived<R, I>& self) -> stamp_id {
+    auto t = self.tag;
+    return {stop_stamp(), t};
 }
 
 template<class R>
-auto icollideu_ref_base(const IBase<R>& a, const IBase<R>& b, int x) -> int {
-    return x - a.tag - b.tag;
+auto icollideu_ref_base(const IBase<R>& a, const IBase<R>& b) -> stamp_id {
+    auto t = -a.tag - b.tag - 1;
+    return {stop_stamp(), t};
 }
 
 template<class R, std::size_t I>
 auto icollideu_ref_impl(
-    const IDerived<R, I>& a, const IDerived<R, I>& b, int x) -> int {
-    return x + a.tag + b.tag;
+    const IDerived<R, I>& a, const IDerived<R, I>& b) -> stamp_id {
+    auto t = a.tag + b.tag;
+    return {stop_stamp(), t};
 }
 
 template<class R, std::size_t... I>

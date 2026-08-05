@@ -11,6 +11,8 @@
 
 #include <boost/openmethod/inplace_vptr.hpp>
 
+#include "timing.hpp"
+
 // Number of leaf classes. Compile-time, because the leaves are a class
 // template: changing it means recompiling. Override with -DOMB_CLASSES=n.
 #ifndef OMB_CLASSES
@@ -29,28 +31,26 @@ struct Base {
 
     virtual ~Base() = default;
 
-    // Object-touch baseline: no dispatch of any kind, but it does load from the
-    // object, which `ovh` does not. Subtracting this instead of `ovh` separates
-    // the cost of reaching a cold object from the cost of dispatching on it.
-    //
-    // Inlines to a single load; that is the point. It reads `tag` at offset 8,
-    // the same cache line as the v-table pointer a dispatch reads at offset 0,
-    // so it pays exactly the same one object miss.
-    auto nvf(int x) const -> int {
-        return x + tag;
+    // Object-touch baseline: a non-virtual call that loads the receiver and
+    // stamps. It reads `tag` on the same cache line as the v-table pointer, so
+    // it pays the same one object miss a dispatch does. noinline so it is a
+    // real call, symmetric with the dispatched rows and the direct baseline.
+    __attribute__((noinline)) auto nvf() const -> stamp_id {
+        auto t = tag;
+        return {stop_stamp(), t};
     }
 
     // 1-argument yardstick: one virtual call. The body returns a constant:
     // the receiver is loaded only because virtual dispatch has to (the vptr
     // lives in it).
-    virtual auto vf(int) const -> int = 0;
+    virtual auto vf() const -> stamp_id = 0;
 
     // Use-flavored yardstick: same call, but the body READS the receiver.
     // Pairs with the use-flavored methods, where every body reads a member of
     // every receiver, so `disp = mean - nvf` is fair for all call forms --
     // including virtual_ptr, which pays its receiver miss in the body instead
     // of in the dispatch. See README, "Two fair comparisons".
-    virtual auto vfu(int) const -> int = 0;
+    virtual auto vfu() const -> stamp_id = 0;
 
     // 2-argument yardstick: the double dispatch idiom. `dd` is the first
     // dispatch, `dd_with` the second. Two chained virtual calls, which is what
@@ -59,13 +59,13 @@ struct Base {
     // The textbook idiom would declare one `dd_with_DerivedK` per leaf in
     // `Base`; with 100 leaves that is unwritable, and it would not change the
     // cost, which is two virtual calls either way. See README.
-    virtual auto dd(const Base&, int) const -> int = 0;
-    virtual auto dd_with(const Base&, int) const -> int = 0;
+    virtual auto dd(const Base&) const -> stamp_id = 0;
+    virtual auto dd_with(const Base&) const -> stamp_id = 0;
 
     // Use-flavored double dispatch: dd_withu's body reads a member of BOTH
     // receivers. Contract: x + a.tag + b.tag.
-    virtual auto ddu(const Base&, int) const -> int = 0;
-    virtual auto dd_withu(const Base&, int) const -> int = 0;
+    virtual auto ddu(const Base&) const -> stamp_id = 0;
+    virtual auto dd_withu(const Base&) const -> stamp_id = 0;
 
     int tag;
 };
@@ -75,28 +75,30 @@ struct Derived : Base {
     Derived() : Base(static_cast<int>(N)) {
     }
 
-    auto vf(int x) const -> int override {
-        return x + static_cast<int>(N);
+    auto vf() const -> stamp_id override {
+        return {stop_stamp(), static_cast<int>(N)};
     }
 
-    auto vfu(int x) const -> int override {
-        return x + tag; // member read: the use-world body
+    auto vfu() const -> stamp_id override {
+        auto t = tag; // member read, kept above the stamp by its mem clobber
+        return {stop_stamp(), t};
     }
 
-    auto dd(const Base& other, int x) const -> int override {
-        return other.dd_with(*this, x);
+    auto dd(const Base& other) const -> stamp_id override {
+        return other.dd_with(*this);
     }
 
-    auto dd_with(const Base&, int x) const -> int override {
-        return x + static_cast<int>(N);
+    auto dd_with(const Base&) const -> stamp_id override {
+        return {stop_stamp(), static_cast<int>(N)};
     }
 
-    auto ddu(const Base& other, int x) const -> int override {
-        return other.dd_withu(*this, x);
+    auto ddu(const Base& other) const -> stamp_id override {
+        return other.dd_withu(*this);
     }
 
-    auto dd_withu(const Base& other, int x) const -> int override {
-        return x + tag + other.tag; // reads both receivers
+    auto dd_withu(const Base& other) const -> stamp_id override {
+        auto t = tag + other.tag; // reads both receivers, above the stamp
+        return {stop_stamp(), t};
     }
 };
 
@@ -143,16 +145,17 @@ struct IBase : boost::openmethod::inplace_vptr_base<IBase<Registry>, Registry> {
 
     virtual ~IBase() = default;
 
-    auto nvf(int x) const -> int {
-        return x + tag;
+    __attribute__((noinline)) auto nvf() const -> stamp_id {
+        auto t = tag;
+        return {stop_stamp(), t};
     }
 
-    virtual auto vf(int) const -> int = 0;
-    virtual auto vfu(int) const -> int = 0;
-    virtual auto dd(const IBase&, int) const -> int = 0;
-    virtual auto dd_with(const IBase&, int) const -> int = 0;
-    virtual auto ddu(const IBase&, int) const -> int = 0;
-    virtual auto dd_withu(const IBase&, int) const -> int = 0;
+    virtual auto vf() const -> stamp_id = 0;
+    virtual auto vfu() const -> stamp_id = 0;
+    virtual auto dd(const IBase&) const -> stamp_id = 0;
+    virtual auto dd_with(const IBase&) const -> stamp_id = 0;
+    virtual auto ddu(const IBase&) const -> stamp_id = 0;
+    virtual auto dd_withu(const IBase&) const -> stamp_id = 0;
 
     int tag;
 };
@@ -165,28 +168,30 @@ struct IDerived
     IDerived() : IBase<Registry>(static_cast<int>(N)) {
     }
 
-    auto vf(int x) const -> int override {
-        return x + static_cast<int>(N);
+    auto vf() const -> stamp_id override {
+        return {stop_stamp(), static_cast<int>(N)};
     }
 
-    auto vfu(int x) const -> int override {
-        return x + this->tag;
+    auto vfu() const -> stamp_id override {
+        auto t = this->tag;
+        return {stop_stamp(), t};
     }
 
-    auto dd(const IBase<Registry>& other, int x) const -> int override {
-        return other.dd_with(*this, x);
+    auto dd(const IBase<Registry>& other) const -> stamp_id override {
+        return other.dd_with(*this);
     }
 
-    auto dd_with(const IBase<Registry>&, int x) const -> int override {
-        return x + static_cast<int>(N);
+    auto dd_with(const IBase<Registry>&) const -> stamp_id override {
+        return {stop_stamp(), static_cast<int>(N)};
     }
 
-    auto ddu(const IBase<Registry>& other, int x) const -> int override {
-        return other.dd_withu(*this, x);
+    auto ddu(const IBase<Registry>& other) const -> stamp_id override {
+        return other.dd_withu(*this);
     }
 
-    auto dd_withu(const IBase<Registry>& other, int x) const -> int override {
-        return x + this->tag + other.tag;
+    auto dd_withu(const IBase<Registry>& other) const -> stamp_id override {
+        auto t = this->tag + other.tag;
+        return {stop_stamp(), t};
     }
 };
 

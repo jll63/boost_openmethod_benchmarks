@@ -93,21 +93,22 @@ struct collide_ref_id;
 struct collide_vp_id;
 
 template<class R>
-using poke_ref = om::method<poke_ref_id, int(om::virtual_<const Base&>, int), R>;
+using poke_ref =
+    om::method<poke_ref_id, stamp_id(om::virtual_<const Base&>), R>;
 
 template<class R>
 using poke_vp =
-    om::method<poke_vp_id, int(om::virtual_ptr<const Base, R>, int), R>;
+    om::method<poke_vp_id, stamp_id(om::virtual_ptr<const Base, R>), R>;
 
 template<class R>
 using collide_ref = om::method<
     collide_ref_id,
-    int(om::virtual_<const Base&>, om::virtual_<const Base&>, int), R>;
+    stamp_id(om::virtual_<const Base&>, om::virtual_<const Base&>), R>;
 
 template<class R>
 using collide_vp = om::method<
     collide_vp_id,
-    int(om::virtual_ptr<const Base, R>, om::virtual_ptr<const Base, R>, int),
+    stamp_id(om::virtual_ptr<const Base, R>, om::virtual_ptr<const Base, R>),
     R>;
 
 // ---------------------------------------------------------------------------
@@ -120,38 +121,40 @@ using collide_vp = om::method<
 // product would need.
 // ---------------------------------------------------------------------------
 
+// Bodies stamp on arrival and carry their identity in `id`, computed after
+// the stamp: the diagonal reports the leaf index, the catch-all -1.
 template<class R, std::size_t I>
-auto poke_ref_impl(const Derived<I>&, int x) -> int {
-    return x + static_cast<int>(I);
+auto poke_ref_impl(const Derived<I>&) -> stamp_id {
+    return {stop_stamp(), static_cast<int>(I)};
 }
 
 template<class R, std::size_t I>
-auto poke_vp_impl(om::virtual_ptr<const Derived<I>, R>, int x) -> int {
-    return x + static_cast<int>(I);
+auto poke_vp_impl(om::virtual_ptr<const Derived<I>, R>) -> stamp_id {
+    return {stop_stamp(), static_cast<int>(I)};
 }
 
 template<class R>
-auto collide_ref_base(const Base&, const Base&, int x) -> int {
-    return x;
+auto collide_ref_base(const Base&, const Base&) -> stamp_id {
+    return {stop_stamp(), -1};
 }
 
 template<class R, std::size_t I>
-auto collide_ref_impl(const Derived<I>&, const Derived<I>&, int x) -> int {
-    return x + static_cast<int>(I);
+auto collide_ref_impl(const Derived<I>&, const Derived<I>&) -> stamp_id {
+    return {stop_stamp(), static_cast<int>(I)};
 }
 
 template<class R>
 auto collide_vp_base(
-    om::virtual_ptr<const Base, R>, om::virtual_ptr<const Base, R>, int x)
-    -> int {
-    return x;
+    om::virtual_ptr<const Base, R>, om::virtual_ptr<const Base, R>)
+    -> stamp_id {
+    return {stop_stamp(), -1};
 }
 
 template<class R, std::size_t I>
 auto collide_vp_impl(
-    om::virtual_ptr<const Derived<I>, R>, om::virtual_ptr<const Derived<I>, R>,
-    int x) -> int {
-    return x + static_cast<int>(I);
+    om::virtual_ptr<const Derived<I>, R>, om::virtual_ptr<const Derived<I>, R>)
+    -> stamp_id {
+    return {stop_stamp(), static_cast<int>(I)};
 }
 
 // `override` accepts a pack of functions, so one static registrar object can
@@ -211,27 +214,28 @@ struct icollide_ref_id;
 
 template<class R>
 using ipoke_ref =
-    om::method<ipoke_ref_id, int(om::virtual_<const IBase<R>&>, int), R>;
+    om::method<ipoke_ref_id, stamp_id(om::virtual_<const IBase<R>&>), R>;
 
 template<class R>
 using icollide_ref = om::method<
     icollide_ref_id,
-    int(om::virtual_<const IBase<R>&>, om::virtual_<const IBase<R>&>, int), R>;
+    stamp_id(om::virtual_<const IBase<R>&>, om::virtual_<const IBase<R>&>),
+    R>;
 
 template<class R, std::size_t I>
-auto ipoke_ref_impl(const IDerived<R, I>&, int x) -> int {
-    return x + static_cast<int>(I);
+auto ipoke_ref_impl(const IDerived<R, I>&) -> stamp_id {
+    return {stop_stamp(), static_cast<int>(I)};
 }
 
 template<class R>
-auto icollide_ref_base(const IBase<R>&, const IBase<R>&, int x) -> int {
-    return x;
+auto icollide_ref_base(const IBase<R>&, const IBase<R>&) -> stamp_id {
+    return {stop_stamp(), -1};
 }
 
 template<class R, std::size_t I>
 auto icollide_ref_impl(
-    const IDerived<R, I>&, const IDerived<R, I>&, int x) -> int {
-    return x + static_cast<int>(I);
+    const IDerived<R, I>&, const IDerived<R, I>&) -> stamp_id {
+    return {stop_stamp(), static_cast<int>(I)};
 }
 
 template<class R, std::size_t... I>
