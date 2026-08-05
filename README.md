@@ -158,7 +158,7 @@ the ratio to the virtual-function yardstick of the same arity.
 ### Warm caches — the sharpest numbers
 
 Nothing is evicted, so reaching the receiver is almost free: the `nvf` baseline
-costs 0.2 cycles more than the direct-call baseline. `net` and `disp` therefore agree, and both are
+measures only 0.2 cycles more than a plain call. `net` and `disp` therefore agree, and both are
 stable to ~1 cycle run to run. The `inplace` rows are ratioed against the inplace
 hierarchy's own `vf`, which measures within a cycle of the main one.
 
@@ -194,7 +194,7 @@ For scale: a direct call to a stamping body measures 3.7 cycles net here.
 ### Caches cold (`clflush`)
 
 Flushed, the first touch of the receiver is a cache miss in its own right: the
-`nvf` baseline costs 264 cycles more than the direct call, against 567 for the whole `vf`
+`nvf` baseline nets 264 cycles, against 567 for the whole `vf`
 yardstick. So 47% of a virtual call's `net` is reaching the object rather than
 dispatching on it. `x net` compares whole call with whole call — the headline;
 `disp` and `x disp` are the mechanism-excess diagnostics.
