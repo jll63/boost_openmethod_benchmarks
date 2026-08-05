@@ -162,11 +162,11 @@ def section_results(data, passes):
           f"right: the\n`touch` baseline nets {touch_m:.0f} cycles, "
           f"against {vfn:.0f} for the whole `vf`\nyardstick. So "
           f"{touch_m / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
-          f"object rather than\ndispatching on it. `x net` compares whole call "
-          f"with whole call — the headline,\nand the most reproducible figure "
-          f"this benchmark produces: misses dominate, and\nmisses do not care "
-          f"about code layout. `disp` and `x disp` are the\n"
-          f"mechanism-excess diagnostics.\n")
+          f"object rather than\ndispatching on it. `x net` — a row's total call "
+          f"cost divided by the yardstick's —\nis the headline, and the most "
+          f"reproducible figure this benchmark produces:\nmisses dominate, "
+          f"and misses do not care about code layout. `disp` and\n`x disp` "
+          f"are the mechanism-excess diagnostics.\n")
     print(f"Median of {passes} passes.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")
     print("|---|---|---|---|---|---|")

@@ -70,7 +70,8 @@ recommended API), in the `OMB_RUN` macro, in `report.py`, and in the README tabl
 ### Two compensations, and they are the point
 
 - `net = mean - probe` removes the apparatus only (the empty window: bracket + stamp). It is the
-  whole-call cost, and `x net` — whole call over whole call — is the headline ratio. `direct` (a
+  whole-call cost, and `x net` — a row's total call cost over the yardstick's — is the headline
+  ratio. `direct` (a
   real call to a stamping body) is a quoted reference point, subtracted only in `disp` for rows
   that never touch the receiver. Do not make excess-over-direct the headline: that answers "what
   does the mechanism add", not "open method vs virtual function".

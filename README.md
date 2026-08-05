@@ -185,10 +185,10 @@ For scale: a direct call to a stamping body measures 3.7 cycles net here.
 Flushed, the first touch of the receiver is a cache miss in its own right: the
 `touch` baseline nets 264 cycles, against 567 for the whole `vf`
 yardstick. So 47% of a virtual call's `net` is reaching the object rather than
-dispatching on it. `x net` compares whole call with whole call — the headline,
-and the most reproducible figure this benchmark produces: misses dominate, and
-misses do not care about code layout. `disp` and `x disp` are the
-mechanism-excess diagnostics.
+dispatching on it. `x net` — a row's total call cost divided by the yardstick's —
+is the headline, and the most reproducible figure this benchmark produces:
+misses dominate, and misses do not care about code layout. `disp` and
+`x disp` are the mechanism-excess diagnostics.
 
 Median of 7 passes.
 
@@ -219,7 +219,8 @@ Median of 7 passes.
 
 ### Reading it
 
-`x vf` / `x net` divide whole call by whole call. For scale, a direct call
+`x vf` and `x net` are a row's total call cost divided by the yardstick's —
+the caller's question, per "What the ratios divide". For scale, a direct call
 measures 3.7 cycles net warm. Ratios from earlier revisions of this README
 were computed under different window and baseline schemes and are not
 comparable; [HISTORY.md](HISTORY.md) has the lineage.
@@ -417,9 +418,9 @@ is a load; if it does not, `indirect_vptr` is pure cost.
 ## Compiler and bitness
 
 Four builds — g++ 13.3 and clang++ 18.1, each at `-m64` and `-m32` — measured
-by `./matrix.sh`. Cells are `x net (net cycles)`: whole call against the same
-build's own yardstick, which is what makes columns comparable — the compilers
-generate different code for the yardstick itself.
+by `./matrix.sh`. Cells are `x net (net cycles)`: each row's total call cost
+divided by the *same build's* yardstick, which is what makes columns
+comparable — the compilers generate different code for the yardstick itself.
 
 The bitness axis is real at the data-structure level: at `-m32`,
 `sizeof(void*)` and the dispatch-table word halve to 4 bytes and
@@ -494,9 +495,8 @@ Median of 7 passes. Spread across passes: median 8%, p90 19%.
 - **Bitness buys nothing cold**: reference-dispatch nets are 1126 → 1155 on
   gcc and 1147 → 1156 on clang — halving every table does not save misses
   that are counted per line, not per byte.
-- **The compilers agree on the mechanisms.** Cold, whole call against whole
-  call, reference dispatch is 1.98x-2.05x the virtual function on all four
-  builds. Warm ratios scatter (the small yardstick denominators are
+- **The compilers agree on the mechanisms.** Cold, reference dispatch costs
+  1.98x-2.05x the virtual function's total call cost on all four builds. Warm ratios scatter (the small yardstick denominators are
   layout-sensitive); read the cycle columns before the ratios there.
 - **clang/32's `virtual_ptr` rows carry a harness artifact**: the i386 ABI
   marshals the 8-byte fat pointer through the stack inside the timed window
