@@ -15,7 +15,7 @@
 set -e
 CXX=${CXX:-g++}
 BITS=${BITS:-64}
-CLASSES=${CLASSES:-100}
+CLASSES=${CLASSES:-25}
 DEBUG=${DEBUG:-0}
 
 if [ "$DEBUG" = "1" ]; then

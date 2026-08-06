@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-An RDTSC micro-benchmark that times **one** Boost.OpenMethod dispatch, caches warm or scrubbed,
+An RDTSC micro-benchmark that times **one** Boost.OpenMethod dispatch with the caches scrubbed,
 against a virtual function call as the yardstick. Read `README.md` first — it is the deliverable, not
 just documentation, and it records the methodology and the reasons behind most of the design.
 
@@ -10,19 +10,19 @@ just documentation, and it records the methodology and the reasons behind most o
 
 ```sh
 ./build.sh                       # -> bin/benchmark-g++-64
-CXX=clang++ BITS=32 ./build.sh   # -> bin/benchmark-clang++-32
-CLASSES=1000 ./build.sh          # leaf count is compile-time (Derived<N> is a template)
+CLASSES=200 ./build.sh           # leaf count is compile-time (Derived<N> is a template)
 DEBUG=1 CLASSES=4 ./build.sh     # -> bin/benchmark-g++-64-g, -O0 -g, for tracing
 
 bin/benchmark-g++-64 --verify    # correctness gate, see below
 ./run.sh                         # pins a core, one build, full matrix of variants
 
-./matrix.sh                      # all 4 compiler x bitness combos, RUNS=5 passes -> results/run<k>/
+./matrix.sh                      # every compiler in compilers.conf, RUNS=5 passes -> results/run<k>/
 python3 report.py                # renders ALL measured README tables from results/run*/
 python3 report.py matrix         # or just one section: results|indirect|matrix
+./probes.sh                      # the disassembly oracle -> bin/probe-*
 python3 asmtab.py                # renders "Every timed region" by disassembling bin/
 
-cmake -S . -B build -DOMB_BITS=32 && cmake --build build && (cd build && ctest)
+cmake -S . -B build && cmake --build build && (cd build && ctest)
 ```
 
 `matrix.sh` honours `CPU`, `REPS`, `RUNS`, `OUTDIR`; `run.sh` honours `CPU`, `REPS`, `BIN`.
@@ -30,6 +30,15 @@ Benchmark flags: `--reps --objects --sweep-mb --cpu --seed --mode warm|clflush|s
 --verify`.
 
 There is no test suite beyond `--verify`, which is also the only ctest target.
+
+**25 leaf classes, and that is measured, not inherited.** A sweep over 10/25/50/100/200 moved no
+cold ratio outside the pass noise -- cold, a dispatch misses one line per level of its chain
+regardless of how many classes exist. The old 100 existed to keep the indirect call unpredictable
+for the *warm* numbers, which are no longer published. It matters because compile time is
+superlinear in the count and dominated by the optimizer, not the metaprogramming: `-ftime-report`
+on g++ 15 puts template instantiation at 6% and `callgraph functions expansion` + `ipa passes` at
+88%, and 100 classes took it over half an hour against 62 s at 25. Switching the hierarchy from
+templates to Boost.PP would attack the 6%.
 
 ## Dependencies
 
@@ -39,8 +48,10 @@ Boost 1.91 installed in `/usr/local/include`. Header-only, nothing is linked. Ed
 `libs/openmethod` take effect on the next `./build.sh` with no reinstall. The symlink is
 machine-specific and is not committed.
 
-32-bit builds need `sudo apt install g++-multilib` (clang uses gcc's multilib headers, so one
-install covers both compilers). The repository lives at
+The compilers measured are listed in `compilers.conf`, one per line, in column order; the first
+is the reference build the single-column sections come from. `matrix.sh`, `probes.sh`, `report.py`
+and `asmtab.py` all read it, so adding a compiler is adding a line and re-running them. The
+repository lives at
 https://github.com/jll63/boost_openmethod_benchmarks (branch `master`); `bin/`, `build/`,
 `.vscode/` and the `include` symlink are local-only and gitignored.
 
@@ -132,6 +143,11 @@ BOOST_OPENMETHOD_REGISTER(decltype(poke_ref_registrar<R>(all_indices{})));
 call arguments, so the call and prologue are untimed while the arguments still arrive through the
 ABI and cannot be constant-folded or devirtualized. Three cache modes: `warm`, `clflush` (targeted
 `clflushopt` over the regions each variant declares) and `sweep` (64 MiB of ordinary stores, 2x L3).
+**Only `clflush` is measured and published.** Warm resolves a cycle or two, but warm a virtual call
+is mostly an indirect-branch mispredict whose cost moves with binary layout, so warm ratios are
+build-local -- they changed sign between clang 18 and clang 22 without the dispatch changing at
+all. See README, "Why cold only". The 32-bit axis is likewise gone: `build.sh` still honours
+`BITS`, nothing else does.
 
 ## Tracing the code
 
@@ -169,8 +185,12 @@ the fastest way to land mid-dispatch with the whole chain on the stack.
   wrong method, or an overrider that silently failed to register, otherwise produces a plausible but
   meaningless table. It runs at startup of every measurement run.
 - **The `virtual_ptr` control**: the three *direct* registries' `om vptr` rows must agree, because
-  the vptr policy is not on that call path. If they diverge, the measurement is wrong, not the
-  library. `indirect` is excluded — it adds a load there by design.
+  the vptr policy is not on that call path -- they compile to the same two instructions, differing
+  only in which `method::fn` word holds the slot. All three are still measured, but the tables
+  print one `vptr` row: three rows of the same call invited reading noise as a difference.
+  `report.py`'s `control()` is where the other two are read, and it warns when they diverge beyond
+  the noise floor. If they do, the measurement is wrong, not the library. `indirect` is excluded --
+  it adds a load there by design.
 - **Every variant must replay the identical receiver sequence**: `run<V>()` reseeds `e.rng` per
   variant. `disp` is a difference of two measurements, and cold both are dominated by which objects
   were drawn; unpaired draws leave that term uncancelled.

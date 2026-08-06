@@ -32,19 +32,28 @@ import statistics
 import sys
 from contextlib import redirect_stdout
 
-# Paired by bitness, matching asmtab.py, so the two compilers' figures for the
-# same target sit side by side. Prose that quotes a per-build list quotes it in
-# this order.
-COLUMNS = [
-    ("clang/64", "clang++-64.csv"),
-    ("gcc/64", "g++-64.csv"),
-    ("clang/32", "clang++-32.csv"),
-    ("gcc/32", "g++-32.csv"),
-]
+def compilers(path="compilers.conf"):
+    """The compiler commands, in column order, from the manifest.
 
-# The build the single-column "## Results" tables are taken from: the newest
-# compiler of the four, so the headline numbers are not a distro default's.
-BUILD = "clang++-64.csv"
+    One place declares the set, so adding a compiler or a version is adding a
+    line to compilers.conf -- no table, generator or script names one.
+    """
+    with open(path) as f:
+        return [l.strip() for l in f
+                if l.strip() and not l.lstrip().startswith("#")]
+
+
+def label_of(cmd):
+    """`clang++-22` -> `clang 22`, `g++-15` -> `gcc 15`."""
+    m = re.fullmatch(r"(clang\+\+|g\+\+)-([0-9][0-9.]*)", cmd)
+    return f"{'clang' if m.group(1) == 'clang++' else 'gcc'} {m.group(2)}" \
+        if m else cmd
+
+
+COLUMNS = [(label_of(c), f"{c}.csv") for c in compilers()]
+
+# The single-column sections are taken from the first compiler listed.
+BUILD = COLUMNS[0][1]
 
 # Named in every caption of a single-build table: those sections are one column
 # of the matrix, and a reader landing on one of them has no other way to tell
@@ -126,36 +135,63 @@ def align_tables(text):
 def dispatch_rows(arity):
     """The yardstick, then every dispatch, virtual_ptr form before reference.
 
+    There is one `vptr` row, not one per registry: a virtual_ptr already
+    carries the v-table pointer, so the registry that built it is not on the
+    call path and the three direct registries compile to the same two
+    instructions. They are still all measured -- `control()` checks that they
+    agree, which is the point of running them -- but printing three rows of
+    the same call invited the reader to read noise as a difference.
+    `indirect` is the exception: it puts a load back on that path.
+
     inplace_vptr gets the reference form only: with the v-table pointer in the
     object, a virtual_ptr would carry a pointer the reference form already has.
     """
     yardstick = "vf" if arity == 1 else "vf+vf"
     rows = [(yardstick, "main", "yardstick", yardstick, arity)]
-    rows += [
-        (f"om {form} / {reg}", "main", reg, f"om {form}", arity)
-        for reg in REGISTRIES
-        for form in ("vptr", "ref")
-    ]
+    rows += [("vptr", "main", "vptr_vector", "om vptr", arity),
+             ("vptr / indirect", "main", "indirect", "om vptr", arity)]
+    rows += [(f"om ref / {reg}", "main", reg, "om ref", arity)
+             for reg in REGISTRIES]
     rows += [(f"om ref / {reg}", reg, reg, "om ref", arity) for reg in INPLACE]
     return rows
 
 
-def emit_world(data, body, passes, warm_caption, cold_caption):
-    """The results-shaped table pair for one body world."""
-    print(warm_caption + "\n")
-    print(f"{BUILD_NAME}, median of {passes} passes.\n")
-    print("| dispatch | arity | net | x net | disp |")
-    print("|---|---|---|---|---|")
+DIRECT = ("vptr_vector", "vptr_map", "flat_map")
 
-    for arity in (1, 2):
-        for label, hier, group, disp, ar in dispatch_rows(arity):
-            k = ("warm", hier, body, group, disp, ar)
-            print(f"| `{label_for(label, group, ar)}` | {ar} | "
-                  f"{cycles(med(data, k, 'net'))} | "
-                  f"{med(data, k, 'x_net'):.2f}x | "
-                  f"{cycles(med(data, k, 'disp'))} |")
 
-    print("\n" + cold_caption + "\n")
+def control(loaded):
+    """The registries that are not on the virtual_ptr call path must agree.
+
+    The published tables carry one `vptr` row, so this is where the other two
+    are read: same call, three registries, and any real divergence means the
+    measurement is wrong rather than the library slow. Returns the worst
+    spread seen, as a percentage, for the Reproducibility text to quote.
+    """
+    worst = 0.0
+
+    for name, _ in COLUMNS:
+        for arity in (1, 2):
+            nets = [med(loaded[name],
+                        ("clflush", "main", "const", reg, "om vptr", arity),
+                        "net")
+                    for reg in DIRECT]
+            spread = (max(nets) - min(nets)) / statistics.median(nets) * 100
+
+            if spread > 25:
+                print(f"warning: {name} arity {arity}: the three direct "
+                      f"registries' `om vptr` rows differ by {spread:.0f}% "
+                      f"({', '.join(f'{n:.0f}' for n in nets)}) -- the vptr "
+                      "policy is not on that call path, so this is the "
+                      "measurement, not the library", file=sys.stderr)
+
+            worst = max(worst, spread)
+
+    return worst
+
+
+def emit_world(data, body, passes, cold_caption):
+    """The results-shaped table for one body world."""
+    print(cold_caption + "\n")
     print(f"{BUILD_NAME}, median of {passes} passes.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")
     print("|---|---|---|---|---|---|")
@@ -180,44 +216,15 @@ def label_for(label, group, arity, suffix=""):
 
 
 def section_results(data, passes):
-    # "net", not "mean": the medians of the raw means land on different passes
-    # for the two baselines, and the difference then fails to recompute from
-    # the net figures the captions display (review finding).
-    direct_m = med(data, ("warm", "main", "-", "baseline", "direct", 0), "net")
-    touch_m = med(data, ("warm", "main", "-", "baseline", "touch", 1), "net")
-
-    print("### Warm caches — the finest resolution\n")
-    print(f"Warm mode resolves the mechanisms' few-cycle differences: reaching "
-          f"the receiver\ncosts {touch_m - direct_m:.1f} cycles here, and rows "
-          f"repeat within a build to a percent or two.\nBut the yardstick is "
-          f"mostly indirect-branch misprediction, which depends on the\n"
-          f"binary's layout — across the four builds its net ranges severalfold "
-          f"— so warm\n*ratios* are build-local. For figures that transfer, "
-          f"read the cold table below.\nThe `inplace` rows divide by their own "
-          f"hierarchy's yardstick.\n")
-    print(f"{BUILD_NAME}, median of {passes} passes.\n")
-    direct = med(data, ("warm", "main", "-", "baseline", "direct", 0), "net")
-    print(f"For scale: a direct call to a stamping body measures "
-          f"{direct:.1f} cycles net here.\n")
-    print("| dispatch | arity | net | x net | disp |")
-    print("|---|---|---|---|---|")
-
-    for arity in (1, 2):
-        for label, hier, group, disp, ar in dispatch_rows(arity):
-            k = ("warm", hier, "const", group, disp, ar)
-            print(f"| `{label_for(label, group, ar)}` | {ar} | "
-                  f"{cycles(med(data, k, 'net'))} | "
-                  f"{med(data, k, 'x_net'):.2f}x | "
-                  f"{cycles(med(data, k, 'disp'))} |")
-
     touch_m = med(data, ("clflush", "main", "-", "baseline", "touch", 1), "net")
     vfn = med(data, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
+    direct = med(data, ("clflush", "main", "-", "baseline", "direct", 0), "net")
     iy1 = [med(data, ("clflush", h, "const", "yardstick", "vf", 1), "net")
            for h in INPLACE]
     iy2 = [med(data, ("clflush", h, "const", "yardstick", "vf+vf", 2), "net")
            for h in INPLACE]
 
-    print("\n### Caches cold (`clflush`) — the steadiest ratios\n")
+    print("### Caches cold (`clflush`)\n")
     print(f"Flushed, the first touch of the receiver is a cache miss in its own "
           f"right: the\n`touch` baseline nets {touch_m:.0f} cycles, "
           f"against {vfn:.0f} for the whole `vf`\nyardstick. So "
@@ -226,11 +233,14 @@ def section_results(data, passes):
           f"cost divided by the yardstick's —\nis the headline, and the most "
           f"reproducible figure this benchmark produces:\nmisses dominate, "
           f"and misses do not care about code layout. `disp` and\n`x disp` "
-          f"are the mechanism-excess diagnostics. The `inplace` rows again\n"
+          f"are the mechanism-excess diagnostics. The `inplace` rows\n"
           f"divide by their own hierarchy's yardstick — {iy1[0]:.0f} and "
           f"{iy1[1]:.0f} cycles here at\narity 1, {iy2[0]:.0f} and {iy2[1]:.0f} "
           f"at arity 2 — not the yardstick rows shown.\n")
     print(f"{BUILD_NAME}, median of {passes} passes.\n")
+    print(f"For scale: a plain call to a stamping body measures {direct:.0f} "
+          f"cycles net —\nit touches no object, so there is nothing for the "
+          f"scrub to take away from it.\n")
     print("| dispatch | arity | net | disp | x net | x disp |")
     print("|---|---|---|---|---|---|")
 
@@ -276,10 +286,8 @@ def section_indirect(loaded, passes):
 
                 print(f"| {label} | {ar} | " + " | ".join(cells) + " |")
 
-    print(f"Median of {passes} passes; `disp` cycles, direct → indirect.\n")
-    print("#### Warm — the extra load, uncontended\n")
-    table("warm")
-    print("\n#### Cold (`clflush`) — the extra load, as a cache miss\n")
+    print(f"Median of {passes} passes; `disp` cycles, direct → indirect, "
+          "caches cold.\n")
     table("clflush")
 
 
@@ -328,8 +336,7 @@ def section_matrix(loaded, passes):
             print(f"\nMedian of {passes} passes -- too few for spread "
                   f"statistics.\n")
 
-    emit("clflush", "Caches cold (`clflush`)")
-    emit("warm", "Warm caches")
+    emit("clflush", "The compilers")
 
 
 # ---------------------------------------------------------------------------
@@ -385,19 +392,13 @@ def emit_sections(section, single, loaded, passes):
         print()
 
     if section in ("used", "all"):
-        vfc = med(single, ("warm", "main", "const", "yardstick", "vf", 1), "net")
-        vfu = med(single, ("warm", "main", "use", "yardstick", "vf", 1), "net")
         emit_world(
             single, "use", passes,
-            "#### Warm, receiver used\n\n"
+            "#### Cold (`clflush`), receiver used\n\n"
             "The member reads execute inside the timed window — every use body "
             "loads its\nreceiver(s) before the arrival stamp (see \"Timing\"). "
-            "Warm that is visible: the\narity-1 rows sit several cycles above "
-            f"their delivery-world counterparts (`vf`\ngoes {vfc:.1f} → "
-            f"{vfu:.1f}); at arity 2 the reads overlap the dispatch and the "
-            "nets\nbarely move. Ratios divide by this table's own yardsticks, "
-            "which pay the same\nreads.",
-            "#### Cold (`clflush`), receiver used")
+            "Ratios divide by this\ntable's own yardsticks, which pay the same "
+            "reads.")
         print()
 
     if section in ("indirect", "all"):

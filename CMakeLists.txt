@@ -16,7 +16,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(OMB_CLASSES 100 CACHE STRING "Number of leaf classes in the hierarchy")
+set(OMB_CLASSES 25 CACHE STRING "Number of leaf classes in the hierarchy")
 set(OMB_BITS 64 CACHE STRING "Target bitness: 64 or 32 (-m32 needs g++-multilib)")
 
 add_executable(benchmark src/main.cpp)

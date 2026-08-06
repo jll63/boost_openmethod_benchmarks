@@ -44,16 +44,9 @@ from contextlib import redirect_stdout
 
 # The README is table-aligned by the editor's markdown formatter on save;
 # emitting the same shape keeps regeneration from churning whitespace.
-from report import align_tables
+from report import align_tables, compilers, label_of
 
-# Paired by bitness, so the two compilers' code for the same target sits side
-# by side -- which is what these listings are read for.
-BUILDS = [
-    ("clang/64", "benchmark-clang++-64"),
-    ("gcc/64", "benchmark-g++-64"),
-    ("clang/32", "benchmark-clang++-32"),
-    ("gcc/32", "benchmark-g++-32"),
-]
+BUILDS = [(label_of(c), f"benchmark-{c}") for c in compilers()]
 
 # label, call form, arity, variant struct, tag template argument.
 #
@@ -63,13 +56,13 @@ BUILDS = [
 VARIANTS = [
     ("vf (yardstick)", "", 1, "v_vf1", None),
     ("vf+vf (yardstick)", "", 2, "v_vf2", None),
-    ("vptr_vector", "vptr", 1, "v_om_vp1", "group_vector"),
+    ("vptr", "", 1, "v_om_vp1", "group_vector"),
     ("vptr_vector", "ref", 1, "v_om_ref1", "group_vector"),
-    ("vptr_vector", "vptr", 2, "v_om_vp2", "group_vector"),
+    ("vptr", "", 2, "v_om_vp2", "group_vector"),
     ("vptr_vector", "ref", 2, "v_om_ref2", "group_vector"),
-    ("indirect", "vptr", 1, "v_om_vp1", "group_indirect"),
+    ("vptr / indirect", "", 1, "v_om_vp1", "group_indirect"),
     ("indirect", "ref", 1, "v_om_ref1", "group_indirect"),
-    ("indirect", "vptr", 2, "v_om_vp2", "group_indirect"),
+    ("vptr / indirect", "", 2, "v_om_vp2", "group_indirect"),
     ("indirect", "ref", 2, "v_om_ref2", "group_indirect"),
     ("inplace", "ref", 1, "v_ip_ref1", "group_inplace"),
     ("inplace", "ref", 2, "v_ip_ref2", "group_inplace"),
@@ -741,7 +734,7 @@ def check_oracle(bindir, name, binary, cells, word):
     binary has no timing rig at all, so anything in the probe that is missing
     from the sliced window is the slice having eaten real dispatch.
     """
-    path = f"{bindir}/{binary.replace('benchmark-', 'probe-')}"
+    path = f"{bindir}/{binary.replace("benchmark-", "probe-")}"
 
     if not os.path.exists(path):
         print(f"note: {path} absent -- skipping the oracle check "
@@ -867,56 +860,32 @@ def uniform(data, label, form, arity, what="depth"):
 
 
 def section_intro():
-    prose("""## Every timed region, four builds side by side
+    prose("""## Every timed region, side by side
 
-The listings above are gcc/64 and hand-picked. `asmtab.py` takes the same
-window from all four binaries and every dispatch: the instructions
-`timed_call<V>` executes between the start bracket and the `call` into the
-body. Each variant is its own `noinline` instantiation, so the window is a
-contiguous range inside a symbol the script finds by name — nothing here is
-transcribed by hand, and `python3 asmtab.py` regenerates this section from
-whatever is in `bin/`.
+The listings above are hand-picked. `asmtab.py` takes the same window from every
+binary and every dispatch: the instructions `timed_call<V>` executes between
+the start bracket and the `call` into the body. Each variant is its own
+`noinline` instantiation, so the window is a contiguous range inside a symbol
+the script finds by name — nothing here is transcribed by hand, and
+`python3 asmtab.py` regenerates this section from whatever is in `bin/`.
 
 Operands that read a global are rewritten to the role the value plays —
-`[rip+slot]`, `[got+mult]` — inferred from what the value is *used for* rather
-than from its symbol offset, because the registry's fields sit at different
-offsets in the 32- and 64-bit builds. The map registries are left out; their
-probe inlines a container walk rather than the arithmetic the others do.
-
-`got` is literal. i386 has no instruction-pointer-relative addressing, so
-position-independent code has to find out where it is: it makes a call whose
-*return address* is the wanted code address — gcc to a one-instruction helper,
-clang to the next instruction — then pops it and adds a link-time constant,
-after which every global is read off that register. That is the
-`call pc_thunk` / `pop` / `add` sequence in the 32-bit columns, so named
-because objdump renders clang's form as a call to the enclosing function plus
-an offset, a hundred characters of mangled name. clang emits it **inside** the
-timed window: on clang/32 every dispatch pays a call, a pop and an add before
-it can read its first global. gcc sets its base up in the prologue, where it
-costs the measurement nothing.
+`[rip+slot]`, `[rip+mult]` — inferred from what the value is *used for* rather
+than from its symbol offset. The map registries are left out; their probe
+inlines a container walk rather than the arithmetic the others do.
 
 **What is shown is the dispatch, sliced out of the window.** Everything below
 is the code that ran between the brackets, minus the instructions the timing
 rig leaves there — identified by a backward slice from the call, so nothing
-that reaches the call or its arguments can be dropped. Because a slice is a
-heuristic and compilers move things, `probes.sh` compiles the same dispatches
-standalone and `asmtab.py` fails the run if any instruction of the standalone
-dispatch is missing from the slice.
-
-**What the slice removes is the start stamp's bookkeeping.** `rdtsc` leaves the counter split
-across `edx:eax`, and each compiler stitches the halves into something the
-epilogue can subtract — gcc shifts and ors, clang negates and subtracts, both
-spill to the stack at `-m32`. It is scheduled freely, it lands anywhere in the
-window (per "Timing"), and left in it outnumbers the dispatch: a virtual call
-on clang/64 is two instructions under five of harness. It is identified by
-following the taint forward from `edx:eax` — an instruction is bookkeeping when
-every value it reads is already part of the timestamp — so nothing that touches
-the receiver, a global or an argument is ever dropped.
-
-What is *not* elided is the i386 argument marshalling: at `-m32` the `lea`,
-`sub esp` and `push` runs materialize the hidden `stamp_id` return slot and the
-receivers inside the window, and the call really does pay for them. The 64-bit
-builds pass those in registers before the bracket opens.
+that reaches the call or its arguments can be dropped. What the slice removes
+is the start stamp: `rdtsc` leaves the counter split across `edx:eax`, and each
+compiler stitches the halves into something the epilogue can subtract, gcc
+shifting and or-ing, clang negating and subtracting. It is scheduled freely and
+lands anywhere in the window (per "Timing"), and left in it outnumbers the
+dispatch — a virtual call is two instructions under five of harness. Because a
+slice is a heuristic and compilers move things, `probes.sh` compiles the same
+dispatches standalone and `asmtab.py` fails the run if any instruction of the
+standalone dispatch is missing from the slice.
 
 ### What the windows contain
 
@@ -925,8 +894,7 @@ complete one after another before the call has its target, counting the call's
 own read of the v-table entry. (The listings earlier in this document count
 that one separately, as "one dependent load, one indirect call"; the same `vf`
 window is 1 + 1 there and 2 here.) The second number is the one that predicts
-cost: the instruction count still includes the 32-bit marshalling, the chain
-does not.
+cost.
 
 One row cannot be read like the others. The double-dispatch idiom's second
 dispatch happens *inside* the first body — `Derived<N>::dd` calls
@@ -940,15 +908,18 @@ def section_shows(data):
     ref1 = uniform(data, "vptr_vector", "ref", 1)
     ind1 = uniform(data, "indirect", "ref", 1)
     vf1 = uniform(data, "vf (yardstick)", "", 1)
-    vp1 = uniform(data, "vptr_vector", "vptr", 1)
+    vp1 = uniform(data, "vptr", "", 1)
     ip1 = uniform(data, "inplace", "ref", 1)
     ipi1 = uniform(data, "inplace_ind", "ref", 1)
-    vp2 = uniform(data, "vptr_vector", "vptr", 2)
+    vp2 = uniform(data, "vptr", "", 2)
+    vpi2 = uniform(data, "vptr / indirect", "", 2)
 
-    # Where the added indirection deepens the chain and where it hides: name
-    # the builds rather than a count, and refuse to print "only on X" if the
-    # split has changed (the guard `uniform()` gives the other claims).
-    vpi = {n: depth(data, "indirect", "vptr", 1, n) for n, _ in BUILDS}
+    # Where the added indirection deepens the chain and where it hides.
+    fatptr = ", ".join(
+        f"{n} takes {insns(data, 'vptr', '', 1, n)}"
+        for n, _ in BUILDS) + " instructions to dispatch through it"
+
+    vpi = {n: depth(data, "vptr / indirect", "", 1, n) for n, _ in BUILDS}
     slack = [n for n, _ in BUILDS if vpi[n] == vp1]
     deeper = [n for n, _ in BUILDS if vpi[n] == vp1 + 1]
 
@@ -958,52 +929,36 @@ def section_shows(data):
                  f"({vpi}) -- the prose in section_shows() says it does; "
                  "rewrite it.")
 
-    vpi2 = uniform(data, "indirect", "vptr", 2)
-
     prose(f"""### What the windows show
 
 - **The reference chain is the same depth on every build**: {ref1} dependent
   loads at arity 1 — receiver, `type_info`, vptr vector, open-method v-table —
-  and {ind1} through `indirect`. What differs across the four columns is
+  and {ind1} through `indirect`. What differs between the columns is
   register allocation and where the stamp bookkeeping lands, not the chain.
-  That is the structural reason the cold ratios agree across builds while the
-  warm ones do not.
+  That is the structural reason the ratios agree across builds.
 - **A `virtual_ptr` call is {vp1} dependent loads, exactly what a virtual
   function call is** ({vf1}) — but not the same {vp1}. The virtual call must
   read the receiver before it can read its v-table; the `virtual_ptr` call
   already has the v-table and spends its chain on the slot and the v-table
   entry the call reads through it. Nothing has to find the receiver first,
-  which is why the two come out level. The parity in the results tables is not
-  a coincidence of this machine; it is in the instruction stream.
+  which is why the two come out level.
+- **Where the compilers differ is what they do with the fat pointer**:
+  {fatptr}. That costs nothing at arity 1 where the reload runs beside the
+  slot load, but it is what makes the next bullet uneven.
 - **`indirect_vptr` adds exactly one dependent load — where there is no slack
-  to hide it.** Through a reference it deepens the chain in every column
-  ({ref1} → {ind1}), and on the inplace hierarchy too ({ip1} → {ipi1}). Through
-  a `virtual_ptr` at arity 1 it deepens {" and ".join(deeper)}, which reach the
-  fat pointer through memory, and disappears on {" and ".join(slack)}, which
-  keep it in a register and so have the extra dereference to spend
-  ({vp1} → {vp1} there, {vp1} → {vp1 + 1} on the other two). At arity 2 the
-  slack is gone and it costs a load everywhere ({vp2} → {vpi2}). That is the
-  same unevenness the cycle tables show, where the policy costs a `virtual_ptr`
-  a fraction of what it costs a reference.
-- **The 32-bit windows are longer but no deeper.** gcc/32's reference window is
-  {insns(data, "vptr_vector", "ref", 1, "gcc/32")} instructions against
-  gcc/64's {insns(data, "vptr_vector", "ref", 1, "gcc/64")}, and all of the
-  difference is argument marshalling and narrower registers — the same {ref1}
-  dependent loads. Halving every pointer does not shorten the chain, which is
-  the instruction-level version of "bitness buys nothing cold".
-- **clang/32's `virtual_ptr` rows show the artifact the tables warn about**:
-  the 8-byte fat pointer is passed by value, and the i386 ABI moves it through
-  `vmovsd` and the stack inside the window — \
-{insns(data, "vptr_vector", "vptr", 1, "clang/32")} and \
-{insns(data, "vptr_vector", "vptr", 2, "clang/32")} instructions against \
-{insns(data, "vptr_vector", "vptr", 1, "clang/64")} and \
-{insns(data, "vptr_vector", "vptr", 2, "clang/64")} on clang/64, for the same
-  {vp1}- and {vp2}-load chains.
+  to hide it.** Through a reference it deepens the chain on every build
+  ({ref1} → {ind1}), and on the inplace hierarchy too ({ip1} → {ipi1}).
+  Through a `virtual_ptr` at arity 1 it deepens {" and ".join(deeper)}, which
+  reaches the fat pointer through memory, and disappears on
+  {" and ".join(slack)}, which keeps it in a register and so has the extra
+  dereference to spend. At arity 2 the slack is gone and it costs a load
+  everywhere ({vp2} → {vpi2}). That is the same unevenness the cycle tables show,
+  where the policy costs a `virtual_ptr` a fraction of what it costs a
+  reference.
 - **At two virtual arguments the multi-method's two lookups are independent**:
   each virtual argument's v-table is fetched on its own chain, one `imul` by
   the table stride combines them, and a single indexed call ends it — depth
-  {vp2} through a `virtual_ptr` against the idiom's two chained calls, which is
-  the shape behind the multi-method's warm advantage over the idiom.
+  {vp2} through a `virtual_ptr` against the idiom's two chained calls.
 """)
 
 
