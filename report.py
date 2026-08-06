@@ -202,7 +202,23 @@ def emit_world(data, body, passes, cold_caption):
             print(f"| `{label_for(label, group, ar)}` | {ar} | "
                   f"{med(data, k, 'net'):.0f} | {med(data, k, 'disp'):.0f} | "
                   f"{med(data, k, 'x_net'):.2f}x | "
-                  f"{med(data, k, 'x_disp'):.2f}x |")
+                  f"{x_disp(data, k, body, disp)} |")
+
+
+def x_disp(data, key, body, dispatch):
+    """The `x disp` cell, or an em dash where the ratio would be nonsense.
+
+    `disp` removes what a row does besides dispatch, and that is not the same
+    baseline for every row: a receiver-touching row loses `touch`, a const-body
+    `virtual_ptr` row -- which never reads the object -- loses only `direct`.
+    Dividing one by the other compares a call that kept its receiver miss with
+    a yardstick that had one removed, and the quotient says nothing about
+    dispatch. The use world has no such rows, so every cell there is real.
+    """
+    if body == "const" and dispatch == "om vptr":
+        return "—"
+
+    return f"{med(data, key, 'x_disp'):.2f}x"
 
 
 def label_for(label, group, arity, suffix=""):
@@ -233,7 +249,10 @@ def section_results(data, passes):
           f"cost divided by the yardstick's —\nis the headline, and the most "
           f"reproducible figure this benchmark produces:\nmisses dominate, "
           f"and misses do not care about code layout. `disp` and\n`x disp` "
-          f"are the mechanism-excess diagnostics. The `inplace` rows\n"
+          f"are the mechanism-excess diagnostics — and `x disp` is blank for "
+          f"the `vptr`\nrows, which never read the receiver: their `disp` "
+          f"removes a plain call where the\nyardstick's removes a receiver "
+          f"miss, so the two are not a ratio. The `inplace` rows\n"
           f"divide by their own hierarchy's yardstick — {iy1[0]:.0f} and "
           f"{iy1[1]:.0f} cycles here at\narity 1, {iy2[0]:.0f} and {iy2[1]:.0f} "
           f"at arity 2 — not the yardstick rows shown.\n")
@@ -250,7 +269,7 @@ def section_results(data, passes):
             print(f"| `{label_for(label, group, ar)}` | {ar} | "
                   f"{med(data, k, 'net'):.0f} | {med(data, k, 'disp'):.0f} | "
                   f"{med(data, k, 'x_net'):.2f}x | "
-                  f"{med(data, k, 'x_disp'):.2f}x |")
+                  f"{x_disp(data, k, "const", disp)} |")
 
 
 def section_indirect(loaded, passes):

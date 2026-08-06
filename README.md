@@ -138,9 +138,19 @@ Same two rows, two honest ratios, answering different questions. `x net`
 answers the caller's: *if I replace this virtual call with an open-method
 call, how much slower is the call?* — twice as slow. `x disp` answers the
 implementer's: *how much more work does the lookup machinery itself do?* —
-three times as much. The second always reads larger, mechanically:
-subtracting the same 250 cycles from both sides of a division pushes the
-ratio away from 1. Neither is wrong; **`x net` is the headline in every
+three times as much. The second reads larger partly by construction:
+subtracting the same 250 cycles from both sides of a division pushes the ratio
+away from 1.
+
+That subtraction is only symmetric when both rows reach the receiver, and one
+kind of row does not. A `virtual_ptr` call with a const body never reads the
+object, so its `disp` removes a plain call, ~5 cycles, where the yardstick's
+removes a 250-cycle receiver miss. The two are not on the same footing and
+their quotient means nothing, so the tables leave `x disp` blank for those
+rows — the honest comparison there is `x net`, which subtracts the same empty
+`probe` from both. In the use world every body reads its receiver, both sides
+lose `touch`, and every `x disp` is real; that is what "Two fair comparisons"
+is for. Neither is wrong; **`x net` is the headline in every
 table, `x disp` the diagnostic.** Every published cell is its own median
 over the passes — ratio cells are medians of the per-pass ratios, not
 quotients of the cycle cells — so recomputed differences and quotients drift
@@ -165,7 +175,9 @@ yardstick. So 46% of a virtual call's `net` is reaching the object rather than
 dispatching on it. `x net` — a row's total call cost divided by the yardstick's —
 is the headline, and the most reproducible figure this benchmark produces:
 misses dominate, and misses do not care about code layout. `disp` and
-`x disp` are the mechanism-excess diagnostics. The `inplace` rows
+`x disp` are the mechanism-excess diagnostics — and `x disp` is blank for the `vptr`
+rows, which never read the receiver: their `disp` removes a plain call where the
+yardstick's removes a receiver miss, so the two are not a ratio. The `inplace` rows
 divide by their own hierarchy's yardstick — 514 and 514 cycles here at
 arity 1, 614 and 678 at arity 2 — not the yardstick rows shown.
 
@@ -177,8 +189,8 @@ it touches no object, so there is nothing for the scrub to take away from it.
 | dispatch                  | arity | net  | disp | x net | x disp |
 | ------------------------- | ----- | ---- | ---- | ----- | ------ |
 | `vf`                      | 1     | 544  | 286  | 1.00x | 1.00x  |
-| `vptr`                    | 1     | 558  | 553  | 1.01x | 1.98x  |
-| `vptr / indirect`         | 1     | 560  | 556  | 1.02x | 1.87x  |
+| `vptr`                    | 1     | 558  | 553  | 1.01x | —      |
+| `vptr / indirect`         | 1     | 560  | 556  | 1.02x | —      |
 | `om ref / vptr_vector`    | 1     | 1148 | 881  | 2.12x | 3.04x  |
 | `om ref / indirect`       | 1     | 1307 | 1046 | 2.43x | 3.66x  |
 | `om ref / vptr_map`       | 1     | 818  | 568  | 1.51x | 1.97x  |
@@ -186,8 +198,8 @@ it touches no object, so there is nothing for the scrub to take away from it.
 | `om ref / inplace`        | 1     | 599  | 351  | 1.16x | 1.34x  |
 | `om ref / inplace_ind`    | 1     | 814  | 555  | 1.58x | 2.06x  |
 | `vf+vf (double dispatch)` | 2     | 652  | 335  | 1.00x | 1.00x  |
-| `vptr`                    | 2     | 858  | 853  | 1.32x | 2.54x  |
-| `vptr / indirect`         | 2     | 854  | 849  | 1.32x | 2.58x  |
+| `vptr`                    | 2     | 858  | 853  | 1.32x | —      |
+| `vptr / indirect`         | 2     | 854  | 849  | 1.32x | —      |
 | `om ref / vptr_vector`    | 2     | 1517 | 1209 | 2.34x | 3.65x  |
 | `om ref / indirect`       | 2     | 1622 | 1317 | 2.49x | 3.91x  |
 | `om ref / vptr_map`       | 2     | 1190 | 878  | 1.85x | 2.65x  |
