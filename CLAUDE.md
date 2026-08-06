@@ -125,7 +125,12 @@ Because inplace objects are a different size (24 vs 16 bytes), each hierarchy ca
 ### Registries and methods
 
 `src/registries.hpp` defines six dispatch configurations (four registries plus two inplace) and the
-methods. Overriders are registered in bulk through the core API, not the `BOOST_OPENMETHOD_*`
+methods. **Four are published.** The two `vptr_map` registries are still built, measured and
+verified -- `report.py`'s `control()` reads their `virtual_ptr` rows to check that the vptr policy
+stays off that call path -- but `REGISTRIES` in `report.py` leaves them out of the tables:
+`clflush` cannot reach a hash map's runtime-allocated bucket arrays, so their cold rows keep
+interior state resident and read better than a truly cold map would. A flattering number under a
+caveat confused more than it informed. Overriders are registered in bulk through the core API, not the `BOOST_OPENMETHOD_*`
 macros, because the leaves are a class template — `method<...>::override` takes a *pack* of
 functions, so one static registrar carries all N:
 

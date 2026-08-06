@@ -65,14 +65,22 @@ Five axes:
 
 | axis      | values                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| dispatch  | how the v-table pointer is reached: `vptr_vector` (the default registry: `std_rtti` + `fast_perfect_hash` + `vptr_vector`), `indirect` (the default plus `indirect_vptr`), `vptr_map` (over `std::unordered_map`), `flat_map` (`vptr_map` over `boost::unordered_flat_map`), `inplace` (`inplace_vptr`: the pointer stored in the object), `inplace_ind` (`inplace_vptr` plus `indirect_vptr`) |
+| dispatch  | how the v-table pointer is reached: `vptr_vector` (the default registry: `std_rtti` + `fast_perfect_hash` + `vptr_vector`), `indirect` (the default plus `indirect_vptr`), `inplace` (`inplace_vptr`: the pointer stored in the object), `inplace_ind` (`inplace_vptr` plus `indirect_vptr`) |
 | call form | `virtual_<const Base&>` (the v-table pointer is looked up at the call site) vs `virtual_ptr<const Base, R>` (already carries it)                                                                                                                                                                                                                                                               |
 | arity     | 1 and 2 virtual arguments                                                                                                                                                                                                                                                                                                                                                                      |
 | body      | `const` — bodies return a compile-time constant, the receiver is touched only where the mechanism requires it; `use` — every body reads a member of every receiver                                                                                                                                                                                                                             |
 | compiler  | clang++ 22.1, g++ 15.2, g++ 13.3 — listed in `compilers.conf`; the first is the reference                                                                                                                                                                                                                                                                                                      |
 
-All six dispatch values are registries in the code; the last two have no
-`vptr` policy at all — the pointer lives in the object via the `inplace_vptr`
+Two more registries are measured but not published: `vptr_map` over
+`std::unordered_map` and over `boost::unordered_flat_map`. `clflush` cannot
+reach a hash map's bucket arrays — they are runtime-allocated, and only the
+container header is flushed — so their cold rows keep interior state resident
+and read better than a truly cold map would. They stay in the code, and in
+`report.py`'s control check, because their `virtual_ptr` rows are how it
+verifies that the vptr policy is off that call path.
+
+All four published dispatch values are registries in the code; the last two
+have no `vptr` policy at all — the pointer lives in the object via the `inplace_vptr`
 mixin, so those two are measured through a reference only (a `virtual_ptr`
 would carry a pointer the object already holds). They also need their own
 class hierarchy — an inplace class binds to exactly one registry — with their
@@ -104,10 +112,10 @@ Four baselines calibrate everything:
   Subtracting it isolates dispatch from the cost of reaching the object
   (**`disp`**).
 
-That comes to 60 variants per cache state: 26 const-body and 26 use-body
-dispatch-and-yardstick rows (per world: 16 main-hierarchy dispatches, 2 main
-yardsticks, and 2 dispatches + 2 yardsticks on each inplace hierarchy), plus
-8 body-neutral baselines. One cache state is published, cold (`clflush`).
+That comes to 60 variants per cache state, the two unpublished map registries
+included: 26 const-body and 26 use-body dispatch-and-yardstick rows (per
+world: 16 main-hierarchy dispatches, 2 main yardsticks, and 2 dispatches + 2
+yardsticks on each inplace hierarchy), plus 8 body-neutral baselines. One cache state is published, cold (`clflush`).
 Warm and a 64 MiB cache sweep exist in the binary as diagnostics; see "Why
 cold only".
 
@@ -193,8 +201,6 @@ it touches no object, so there is nothing for the scrub to take away from it.
 | `vptr / indirect`         | 1     | 560  | 556  | 1.02x | —      |
 | `om ref / vptr_vector`    | 1     | 1148 | 881  | 2.12x | 3.04x  |
 | `om ref / indirect`       | 1     | 1307 | 1046 | 2.43x | 3.66x  |
-| `om ref / vptr_map`       | 1     | 818  | 568  | 1.51x | 1.97x  |
-| `om ref / flat_map`       | 1     | 783  | 520  | 1.47x | 1.85x  |
 | `om ref / inplace`        | 1     | 599  | 351  | 1.16x | 1.34x  |
 | `om ref / inplace_ind`    | 1     | 814  | 555  | 1.58x | 2.06x  |
 | `vf+vf (double dispatch)` | 2     | 652  | 335  | 1.00x | 1.00x  |
@@ -202,8 +208,6 @@ it touches no object, so there is nothing for the scrub to take away from it.
 | `vptr / indirect`         | 2     | 854  | 849  | 1.32x | —      |
 | `om ref / vptr_vector`    | 2     | 1517 | 1209 | 2.34x | 3.65x  |
 | `om ref / indirect`       | 2     | 1622 | 1317 | 2.49x | 3.91x  |
-| `om ref / vptr_map`       | 2     | 1190 | 878  | 1.85x | 2.65x  |
-| `om ref / flat_map`       | 2     | 1200 | 892  | 1.83x | 2.51x  |
 | `om ref / inplace`        | 2     | 865  | 557  | 1.41x | 1.87x  |
 | `om ref / inplace_ind`    | 2     | 1140 | 827  | 1.67x | 2.20x  |
 
@@ -221,10 +225,6 @@ Ratios below are `x net` unless marked `disp`.
   from a different harness on different hardware. The excess is the
   hash-and-look-up: two more dependent loads than the `virtual_ptr` form,
   visible in the `disp` column.
-- **The map registries beat the hash** (1.51x and 1.47x through a reference
-  against `vptr_vector`'s 2.12x) — but the map rows are flattered: `clflush` cannot
-  reach their runtime-allocated bucket arrays, so interior state stays
-  resident (see Caveats).
 - **`inplace_vptr` is the closest reference dispatch to a virtual function**
   (1.16x): its layout *is* the virtual function's layout.
 - **At two virtual arguments the idiom wins**: 1.32x net for the
@@ -266,8 +266,6 @@ clang 22, median of 7 passes.
 | `vptr / indirect`         | 1     | 574  | 331  | 1.06x | 1.11x  |
 | `om ref / vptr_vector`    | 1     | 1098 | 836  | 2.06x | 2.97x  |
 | `om ref / indirect`       | 1     | 1327 | 1052 | 2.56x | 3.73x  |
-| `om ref / vptr_map`       | 1     | 754  | 473  | 1.42x | 1.86x  |
-| `om ref / flat_map`       | 1     | 758  | 520  | 1.44x | 1.77x  |
 | `om ref / inplace`        | 1     | 614  | 361  | 1.14x | 1.26x  |
 | `om ref / inplace_ind`    | 1     | 808  | 565  | 1.48x | 1.87x  |
 | `vf+vf (double dispatch)` | 2     | 638  | 319  | 1.00x | 1.00x  |
@@ -275,8 +273,6 @@ clang 22, median of 7 passes.
 | `vptr / indirect`         | 2     | 865  | 548  | 1.30x | 1.60x  |
 | `om ref / vptr_vector`    | 2     | 1379 | 1056 | 2.23x | 3.32x  |
 | `om ref / indirect`       | 2     | 1630 | 1317 | 2.61x | 4.23x  |
-| `om ref / vptr_map`       | 2     | 1156 | 848  | 1.89x | 2.91x  |
-| `om ref / flat_map`       | 2     | 1124 | 819  | 1.79x | 2.48x  |
 | `om ref / inplace`        | 2     | 877  | 572  | 1.37x | 1.69x  |
 | `om ref / inplace_ind`    | 2     | 1136 | 828  | 1.64x | 2.15x  |
 
@@ -384,8 +380,6 @@ headline numbers are a current compiler's.
 | `vptr / indirect`       | 1.02x (560)  | 1.10x (619)  | 1.11x (614)  |
 | `om ref / vptr_vector`  | 2.12x (1148) | 1.99x (1140) | 2.08x (1136) |
 | `om ref / indirect`     | 2.43x (1307) | 2.54x (1370) | 2.54x (1426) |
-| `om ref / vptr_map`     | 1.51x (818)  | 1.51x (867)  | 1.52x (824)  |
-| `om ref / flat_map`     | 1.47x (783)  | 1.52x (824)  | 1.52x (788)  |
 | `om ref / inplace`      | 1.16x (599)  | 1.11x (586)  | 1.20x (607)  |
 | `om ref / inplace_ind`  | 1.58x (814)  | 1.51x (790)  | 1.61x (788)  |
 | **2 virtual arguments** |              |              |              |
@@ -394,12 +388,10 @@ headline numbers are a current compiler's.
 | `vptr / indirect`       | 1.32x (854)  | 1.14x (879)  | 1.35x (878)  |
 | `om ref / vptr_vector`  | 2.34x (1517) | 2.00x (1496) | 2.19x (1490) |
 | `om ref / indirect`     | 2.49x (1622) | 2.19x (1658) | 2.54x (1674) |
-| `om ref / vptr_map`     | 1.85x (1190) | 1.63x (1211) | 1.74x (1174) |
-| `om ref / flat_map`     | 1.83x (1200) | 1.54x (1168) | 1.74x (1131) |
 | `om ref / inplace`      | 1.41x (865)  | 1.34x (896)  | 1.42x (891)  |
 | `om ref / inplace_ind`  | 1.67x (1140) | 1.84x (1129) | 1.95x (1150) |
 
-Median of 7 passes. Spread across passes: median 18%, p90 26%.
+Median of 7 passes. Spread across passes: median 17%, p90 26%.
 
 ### What it shows
 
@@ -552,10 +544,6 @@ whenever every registry is wrong the same way.
   falls back to normal priority without it.
 - The harness reaches into `boost::openmethod::detail` for the dispatch-table
   arena — deliberate: `clflush` must evict exactly what the dispatch reads.
-- **`clflush` cannot reach the map registries' bucket arrays** — they are
-  runtime-allocated, and only the container header is flushed — so the
-  `vptr_map`/`flat_map` cold rows keep some interior state resident and read
-  slightly better than a truly cold map would.
 
 ## Generated code
 

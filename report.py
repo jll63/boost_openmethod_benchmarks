@@ -60,7 +60,14 @@ BUILD = COLUMNS[0][1]
 # which (review finding).
 BUILD_NAME = next(n for n, f in COLUMNS if f == BUILD)
 
-REGISTRIES = ("vptr_vector", "indirect", "vptr_map", "flat_map")
+# Published rows. The two `vptr_map` registries are measured and verified like
+# the rest -- they are how `control()` checks that the vptr policy stays off
+# the virtual_ptr call path -- but they are not printed: `clflush` cannot reach
+# a hash map's bucket arrays, which are runtime-allocated, so their cold rows
+# keep interior state resident and read better than a truly cold map would.
+# Publishing a number that flattering, with a caveat under it, confused more
+# than it informed.
+REGISTRIES = ("vptr_vector", "indirect")
 INPLACE = ("inplace", "inplace_ind")
 
 
