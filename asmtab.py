@@ -843,7 +843,7 @@ def depth(data, label, form, arity, build):
 def uniform(data, label, form, arity, what="depth"):
     """The value every build agrees on, or a hard stop.
 
-    The prose below states several claims as holding across all four builds.
+    The prose below states several claims as holding across all builds.
     Rather than print a claim that has quietly stopped being true -- a
     recompile with different flags is all it would take -- the generator
     refuses to emit it and says which row broke.
@@ -923,11 +923,23 @@ def section_shows(data):
     slack = [n for n, _ in BUILDS if vpi[n] == vp1]
     deeper = [n for n, _ in BUILDS if vpi[n] == vp1 + 1]
 
-    if len(slack) + len(deeper) != len(BUILDS) or not slack or not deeper:
-        sys.exit("asmtab: `om vptr / indirect` arity 1 no longer splits into "
-                 f"builds that absorb the extra load and builds that do not "
-                 f"({vpi}) -- the prose in section_shows() says it does; "
-                 "rewrite it.")
+    if len(slack) + len(deeper) != len(BUILDS):
+        sys.exit("asmtab: `om vptr / indirect` arity 1 depth is neither the base "
+                 f"nor base+1 on some build ({vpi}) -- rewrite section_shows().")
+
+    # The arity-1 story depends on which builds absorb the extra load; phrase it
+    # for whatever the current build set does (a split, all-deeper, or all-hide).
+    if deeper and slack:
+        arity1 = (f"at arity 1 it deepens {' and '.join(deeper)}, which reaches "
+                  f"the fat pointer through memory, and disappears on "
+                  f"{' and '.join(slack)}, which keep it in a register")
+    elif deeper:
+        arity1 = (f"at arity 1 it deepens the chain on every build "
+                  f"({vp1} → {vp1 + 1}), reaching the fat pointer through memory")
+    else:
+        arity1 = (f"at arity 1 it hides on every build — {vp1} loads deep either "
+                  f"way — the fat pointer staying in a register, so the extra "
+                  f"dereference runs beside the slot load")
 
     prose(f"""### What the windows show
 
@@ -948,11 +960,8 @@ def section_shows(data):
 - **`indirect_vptr` adds exactly one dependent load — where there is no slack
   to hide it.** Through a reference it deepens the chain on every build
   ({ref1} → {ind1}), and on the inplace hierarchy too ({ip1} → {ipi1}).
-  Through a `virtual_ptr` at arity 1 it deepens {" and ".join(deeper)}, which
-  reaches the fat pointer through memory, and disappears on
-  {" and ".join(slack)}, which keeps it in a register and so has the extra
-  dereference to spend. At arity 2 the slack is gone and it costs a load
-  everywhere ({vp2} → {vpi2}). That is the same unevenness the cycle tables show,
+  Through a `virtual_ptr` {arity1}. At arity 2 the slack is gone and it costs a
+  load everywhere ({vp2} → {vpi2}). That is the same unevenness the cycle tables show,
   where the policy costs a `virtual_ptr` a fraction of what it costs a
   reference.
 - **At two virtual arguments the multi-method's two lookups are independent**:

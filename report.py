@@ -196,20 +196,24 @@ def control(loaded):
     return worst
 
 
-def emit_world(data, body, passes, cold_caption):
-    """The results-shaped table for one body world."""
-    print(cold_caption + "\n")
-    print(f"{BUILD_NAME}, median of {passes} passes.\n")
-    print("| dispatch | arity | net | disp | x net | x disp |")
-    print("|---|---|---|---|---|---|")
+def cold_table(intel, zen, body):
+    """The decluttered cold table: the headline ratio for both machines."""
+    print("| dispatch | arity | x net (Intel) | x net (Zen) |")
+    print("|---|---|---|---|")
 
     for arity in (1, 2):
         for label, hier, group, disp, ar in dispatch_rows(arity):
             k = ("clflush", hier, body, group, disp, ar)
             print(f"| `{label_for(label, group, ar)}` | {ar} | "
-                  f"{med(data, k, 'net'):.0f} | {med(data, k, 'disp'):.0f} | "
-                  f"{med(data, k, 'x_net'):.2f}x | "
-                  f"{x_disp(data, k, body, disp)} |")
+                  f"{med(intel, k, 'x_net'):.2f}x | "
+                  f"{med(zen, k, 'x_net'):.2f}x |")
+
+
+def emit_world(intel, zen, body, passes, cold_caption):
+    """The results-shaped cold table for one body world, both machines."""
+    print(cold_caption + "\n")
+    print(f"{BUILD_NAME}, median of {passes} passes each.\n")
+    cold_table(intel, zen, body)
 
 
 def x_disp(data, key, body, dispatch):
@@ -238,48 +242,25 @@ def label_for(label, group, arity, suffix=""):
 # ---------------------------------------------------------------------------
 
 
-def section_results(data, passes):
-    touch_m = med(data, ("clflush", "main", "-", "baseline", "touch", 1), "net")
-    vfn = med(data, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
-    direct = med(data, ("clflush", "main", "-", "baseline", "direct", 0), "net")
-    iy1 = [med(data, ("clflush", h, "const", "yardstick", "vf", 1), "net")
-           for h in INPLACE]
-    iy2 = [med(data, ("clflush", h, "const", "yardstick", "vf+vf", 2), "net")
-           for h in INPLACE]
+def section_results(intel, zen, passes):
+    touch_m = med(intel, ("clflush", "main", "-", "baseline", "touch", 1), "net")
+    vfn = med(intel, ("clflush", "main", "const", "yardstick", "vf", 1), "net")
 
     print("### Caches cold (`clflush`)\n")
-    print(f"Flushed, the first touch of the receiver is a cache miss in its own "
-          f"right: the\n`touch` baseline nets {touch_m:.0f} cycles, "
-          f"against {vfn:.0f} for the whole `vf`\nyardstick. So "
-          f"{touch_m / vfn * 100:.0f}% of a virtual call's `net` is reaching the "
-          f"object rather than\ndispatching on it. `x net` — a row's total call "
-          f"cost divided by the yardstick's —\nis the headline, and the most "
-          f"reproducible figure this benchmark produces:\nmisses dominate, "
-          f"and misses do not care about code layout. `disp` and\n`x disp` "
-          f"are the mechanism-excess diagnostics — and `x disp` is blank for "
-          f"the `vptr`\nrows, which never read the receiver: their `disp` "
-          f"removes a plain call where the\nyardstick's removes a receiver "
-          f"miss, so the two are not a ratio. The `inplace` rows\n"
-          f"divide by their own hierarchy's yardstick — {iy1[0]:.0f} and "
-          f"{iy1[1]:.0f} cycles here at\narity 1, {iy2[0]:.0f} and {iy2[1]:.0f} "
-          f"at arity 2 — not the yardstick rows shown.\n")
-    print(f"{BUILD_NAME}, median of {passes} passes.\n")
-    print(f"For scale: a plain call to a stamping body measures {direct:.0f} "
-          f"cycles net —\nit touches no object, so there is nothing for the "
-          f"scrub to take away from it.\n")
-    print("| dispatch | arity | net | disp | x net | x disp |")
-    print("|---|---|---|---|---|---|")
-
-    for arity in (1, 2):
-        for label, hier, group, disp, ar in dispatch_rows(arity):
-            k = ("clflush", hier, "const", group, disp, ar)
-            print(f"| `{label_for(label, group, ar)}` | {ar} | "
-                  f"{med(data, k, 'net'):.0f} | {med(data, k, 'disp'):.0f} | "
-                  f"{med(data, k, 'x_net'):.2f}x | "
-                  f"{x_disp(data, k, "const", disp)} |")
+    print(f"`x net` — a row's total call cost over the same-arity `vf` yardstick, "
+          f"in the same\nbuild — is the headline this benchmark reports, and its "
+          f"most reproducible\nfigure: cold, misses dominate, and misses do not "
+          f"care about code layout.\nFlushed, most of a virtual call's cost is "
+          f"reaching the receiver ({touch_m / vfn * 100:.0f}% of it\nhere), common "
+          f"to every row, so the ratio is what isolates the mechanism. The\ntwo "
+          f"columns are the two measurement machines, both clang 22: the Intel\n"
+          f"Core i7-1280P (Alder Lake) and the AMD Ryzen 9 9955HX (Zen 5). The "
+          f"`inplace`\nrows divide by their own hierarchy's yardstick.\n")
+    print(f"{BUILD_NAME}, median of {passes} passes each.\n")
+    cold_table(intel, zen, "const")
 
 
-def section_indirect(loaded, passes):
+def section_indirect(columns, passes):
     # label, call form, (hier, group) direct, (hier, group) indirect
     SPEC = [
         ("`virtual_ptr`", "om vptr",
@@ -291,16 +272,15 @@ def section_indirect(loaded, passes):
     ]
 
     def table(mode):
-        print("| call form | arity | " + " | ".join(n for n, _ in COLUMNS)
+        print("| call form | arity | " + " | ".join(n for n, _ in columns)
               + " |")
-        print("|---|---|" + "---|" * len(COLUMNS))
+        print("|---|---|" + "---|" * len(columns))
 
         for label, call, dkey, ikey in SPEC:
             for ar in (1, 2):
                 cells = []
 
-                for name, _ in COLUMNS:
-                    d = loaded[name]
+                for _, d in columns:
                     dv = med(d, (mode, dkey[0], "const", dkey[1], call, ar), "disp")
                     iv = med(d, (mode, ikey[0], "const", ikey[1], call, ar), "disp")
                     # Subtract the endpoints as printed, so the delta always
@@ -317,24 +297,23 @@ def section_indirect(loaded, passes):
     table("clflush")
 
 
-def section_matrix(loaded, passes):
+def section_matrix(columns, passes):
     def emit(mode, title):
         print(f"#### {title}\n")
-        print("| dispatch | " + " | ".join(n for n, _ in COLUMNS) + " |")
-        print("|---|" + "---|" * len(COLUMNS))
+        print("| dispatch | " + " | ".join(n for n, _ in columns) + " |")
+        print("|---|" + "---|" * len(columns))
 
         spreads = []
 
         for arity in (1, 2):
             plural = "" if arity == 1 else "s"
             print(f"| **{arity} virtual argument{plural}** | "
-                  + " | ".join([""] * len(COLUMNS)) + " |")
+                  + " | ".join([""] * len(columns)) + " |")
 
             for label, hier, group, disp, ar in dispatch_rows(arity):
                 cells = []
 
-                for name, _ in COLUMNS:
-                    d = loaded[name]
+                for name, d in columns:
                     k = (mode, hier, "const", group, disp, ar)
                     if k not in d:
                         sys.exit(f"results incomplete: no rows for {k} in "
@@ -402,37 +381,64 @@ def main():
     # disk overstated the data actually loaded (review finding).
     passes = min(counts)
 
-    single = loaded[next(n for n, f in COLUMNS if f == BUILD)]
+    intel = loaded[BUILD_NAME]
+
+    # The archived Zen-box dataset for the cross-machine comparison columns,
+    # materialized from git history into results-zen/. See README.
+    zen_dirs = sorted(glob.glob(os.path.join("results-zen", "run*")))
+    loaded_zen = {}
+    for name, fn in COLUMNS:
+        paths = [os.path.join(d, fn) for d in zen_dirs
+                 if os.path.exists(os.path.join(d, fn))]
+        if not paths:
+            sys.exit(f"missing {fn} in every results-zen/run*/ -- the Zen "
+                     "comparison dataset. Restore it from git history.")
+        loaded_zen[name] = load(paths)
+
+    zen = loaded_zen[BUILD_NAME]
+
+    # clang 22 and gcc 15 on both machines.
+    matrix_cols = [
+        ("clang 22 (Intel)", loaded["clang 22"]),
+        ("gcc 15 (Intel)", loaded["gcc 15"]),
+        ("clang 22 (Zen)", loaded_zen["clang 22"]),
+        ("gcc 15 (Zen)", loaded_zen["gcc 15"]),
+    ]
+    # The indirect-cost table stays single-machine (Intel).
+    indirect_cols = [
+        ("clang 22", loaded["clang 22"]),
+        ("gcc 15", loaded["gcc 15"]),
+    ]
 
     buf = io.StringIO()
 
     with redirect_stdout(buf):
-        emit_sections(section, single, loaded, passes)
+        emit_sections(section, intel, zen, matrix_cols, indirect_cols, passes)
 
     sys.stdout.write(align_tables(buf.getvalue()))
 
 
-def emit_sections(section, single, loaded, passes):
+def emit_sections(section, intel, zen, matrix_cols, indirect_cols, passes):
     if section in ("results", "all"):
-        section_results(single, passes)
+        section_results(intel, zen, passes)
         print()
 
     if section in ("used", "all"):
         emit_world(
-            single, "use", passes,
+            intel, zen, "use", passes,
             "#### Cold (`clflush`), receiver used\n\n"
             "The member reads execute inside the timed window — every use body "
             "loads its\nreceiver(s) before the arrival stamp (see \"Timing\"). "
             "Ratios divide by this\ntable's own yardsticks, which pay the same "
-            "reads.")
+            "reads. Both columns are clang 22:\nIntel and Zen.")
         print()
 
     if section in ("indirect", "all"):
-        section_indirect(loaded, passes)
+        section_indirect(indirect_cols, passes)
         print()
 
     if section in ("matrix", "all"):
-        section_matrix(loaded, passes)
+        section_matrix(matrix_cols, passes)
 
 
 if __name__ == "__main__":

@@ -198,10 +198,16 @@ same adversarial gate as new code, because fresh text mints fresh errors.
 
 ## Odds and ends
 
-- A cgroup-shielding experiment (à la Boost.Unordered's `cgexec` runs) showed
-  deliberate CPU and memory co-tenancy moves the results *less* than idle
-  run-to-run variance — the trimmed mean already discards preemptions — so the
-  benchmark does not shield, and the README says why.
+- A cgroup-shielding experiment (à la Boost.Unordered's `cgexec` runs) on the
+  Zen 5 / WSL2 machine showed deliberate CPU and memory co-tenancy moving the
+  results *less* than idle run-to-run variance — the trimmed mean discards
+  preemptions. Redone on the Intel Alder Lake box the picture is sharper: a
+  spinner on the measurement core is still absorbed (+0.4%, within idle spread),
+  but other-core spinners (~+5-7%) and 256 MiB memory streamers (~+3%) inflate
+  the *absolute* cold cycles — all-core turbo lowers the P-core's real clock and
+  TSC reference cycles count the same work as more ticks — while the published
+  *ratios* hold, because the same-run yardstick inflates with the row. The README
+  states the Intel-box result.
 - The receiver-touch baseline was called `nvf` for most of this history —
   "non-virtual `vf`", coined when there was exactly one virtual function to be
   the non-virtual sibling of, and expanding to *non-virtual virtual function*

@@ -11,6 +11,9 @@
 # Scratch result sets; results/ itself is committed, since the README tables are
 # generated from it and report.py must be able to reproduce them.
 /results-*/
+# ...except the archived Zen-box dataset, which report.py reads for the
+# cross-machine comparison columns and must therefore be committed too.
+!/results-zen/
 
 # Editor and tool state.
 /.vscode/

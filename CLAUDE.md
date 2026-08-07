@@ -17,7 +17,7 @@ bin/benchmark-g++-64 --verify    # correctness gate, see below
 ./run.sh                         # pins a core, one build, full matrix of variants
 
 ./matrix.sh                      # every compiler in compilers.conf, RUNS=5 passes -> results/run<k>/
-python3 report.py                # renders ALL measured README tables from results/run*/
+python3 report.py                # renders ALL measured README tables from results/run*/ + results-zen/
 python3 report.py matrix         # or just one section: results|indirect|matrix
 ./probes.sh                      # the disassembly oracle -> bin/probe-*
 python3 asmtab.py                # renders "Every timed region" by disassembling bin/
@@ -108,8 +108,10 @@ rows ratio against the use yardstick. See README, "Two fair comparisons". Cold, 
   appears to cost, and it is common to every variant, so `net` alone compresses every ratio toward
   1.
 
-`x disp` (ratio to the same-arity `vf` yardstick) is the headline statistic. Cold absolutes swing
-~25% run to run; same-run ratios do not.
+`x net` (ratio to the same-arity `vf` yardstick) is the headline statistic, and the only ratio the
+tables now print: the cold tables were decluttered to `dispatch | arity | x net (Intel) | x net
+(Zen)`, and `x disp` was dropped from them (it lives on only as a diagnostic, quoted in `disp`
+cycles by the indirect-cost table). Cold absolutes swing ~25% run to run; same-run ratios do not.
 
 ### Two class hierarchies, and per-hierarchy baselines
 
@@ -147,7 +149,7 @@ BOOST_OPENMETHOD_REGISTER(decltype(poke_ref_registrar<R>(all_indices{})));
 `src/timing.hpp`. The `rdtsc` brackets live *inside* a `noinline` function whose parameters are the
 call arguments, so the call and prologue are untimed while the arguments still arrive through the
 ABI and cannot be constant-folded or devirtualized. Three cache modes: `warm`, `clflush` (targeted
-`clflushopt` over the regions each variant declares) and `sweep` (64 MiB of ordinary stores, 2x L3).
+`clflushopt` over the regions each variant declares) and `sweep` (64 MiB of ordinary stores, ~2.7x L3).
 **Only `clflush` is measured and published.** Warm resolves a cycle or two, but warm a virtual call
 is mostly an indirect-branch mispredict whose cost moves with binary layout, so warm ratios are
 build-local -- they changed sign between clang 18 and clang 22 without the dispatch changing at
@@ -205,8 +207,8 @@ the fastest way to land mid-dispatch with the whole chain on the stack.
 - **Inplace classes register via their constructor being instantiated.** `ifactories<R>()` forces
   every leaf's constructor; a leaf that is never constructed is never registered and `initialize()`
   rejects the overrider naming it.
-- **Read the mean, not the median.** An lfence-bracketed `rdtsc` pair costs 25 or 50 cycles
-  bimodally on this machine, so warm medians are always exactly 50. The mean (trimmed of its top 5%,
+- **Read the mean, not the median.** An lfence-bracketed `rdtsc` pair is quantized to the TSC
+  tick (~30 cycles on this machine), so medians land on a tick. The mean (trimmed of its top 5%,
   where preemptions land) resolves below one tick.
 
 ## Library facts that are easy to get wrong
@@ -227,21 +229,24 @@ Confirmed against the Boost.OpenMethod sources (`libs/openmethod` in a Boost che
 
 ## Measurement discipline
 
-The machine is a Zen 5 under WSL2 and is **not idle** (load average ~1). Consequences that have
-already bitten:
+The machine is an Intel Alder Lake laptop (i7-1280P, 6 P-cores + 8 E-cores) on native Linux and is
+**not idle** (load average ~1). Pin measurements to a P-core (the default `CPU=2`); an E-core would
+characterize a different core, not a different dispatch. Consequences that have already bitten:
 
 - A single cold pass moves by a median of 11% between repeats (p90 40%). `matrix.sh` therefore loops
   the whole matrix and `report.py` takes the **median across passes**; looping the matrix rather
-  than repeating each build in place also spreads drift over all four columns.
+  than repeating each build in place also spreads drift over both columns alike.
 - Warm has the finest resolution *within* a build (a few percent between passes) but its ratios
   are build-local: the warm yardstick is mostly indirect-branch misprediction, whose cost depends
   on binary layout (its net ranges severalfold across the four builds). The cold whole-call ratios
   are the reproducible characterization (~4% across builds for `om ref`). Sub-cycle warm gaps
   remain untrustworthy — scheduling phase; see HISTORY.md for the artifacts this produced.
-- **Do not bother shielding the benchmark** (cgroup cpuset, `isolcpus`, `cgexec`). Measured: a
-  spinner on the measurement core itself moves the result less than idle run-to-run variation, and
-  memory-bandwidth contention shifts it ~5% against 11% intrinsic drift. The trimmed mean already
-  discards preemption-contaminated samples. See "Shielding would not help" in README.md.
+- **Co-tenancy moves absolutes, not ratios** (measured on this box, 6 passes/condition). A spinner on
+  the measurement core is absorbed by the trimmed mean (+0.4%, within the 1.6% idle spread); other-core
+  spinners (~+5-7%) and 256 MiB memory streamers (~+3%) inflate absolute cold cycles via all-core-turbo
+  clock reduction, but the yardstick moves with them so the published ratios hold (headline `x_disp`
+  3.63 idle → 3.77 other-core). Pin to a lightly loaded P-core for stable absolutes; the ratios are
+  robust regardless. See "Co-tenancy moves the absolutes, not the ratios" in README.md.
 - The check that matters is the `virtual_ptr` control, not a tidy `uptime` — discard any run where
   the three direct registries' `om vptr` rows disagree.
 
@@ -251,6 +256,15 @@ Benchmark evolution — superseded designs, resolved artifacts, review chronicle
 HISTORY.md, not the README. The README describes the current scheme and its results; when a
 redesign obsoletes prose, move the story to HISTORY.md (with the old numbers, marked as
 scheme-specific) and leave a link. The README's bottom "History" section points there.
+
+The tables are a **cross-machine comparison**: `report.py` reads the Intel box's data from
+`results/` and the AMD Zen 5 box's committed dataset from `results-zen/` (archived from git
+history; kept out of the `/results-*/` ignore by a `!/results-zen/` exception, because report.py
+hard-fails without it). The cold tables print `x net (Intel) | x net (Zen)`; "The compilers" is a
+clang 22 / g++ 15 × Intel / Zen grid; the indirect-cost table stays Intel-only, clang 22 / g++ 15.
+Column selection lives in `main()` (`matrix_cols`, `indirect_cols`); the single-column `x net`
+sections come from Intel clang 22. `compilers.conf` lists only clang++-22 and g++-15 now — g++-13
+was dropped altogether (removed from the manifest, and its CSVs deleted from both datasets).
 
 Every table, and the paragraph of prose above each one, is generated by `report.py` — including the
 captions that quote figures. Edit the generator, not the README, or the next regeneration reverts
